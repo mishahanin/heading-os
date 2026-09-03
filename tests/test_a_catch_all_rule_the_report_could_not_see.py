@@ -539,7 +539,8 @@ def test_install_signal_handlers_routes_both_signals():
             signal.signal(s, h)
 
 
-def test_main_installs_the_handlers(monkeypatch):
+def test_main_installs_the_handlers(monkeypatch, disarm_clone_guard):
+    disarm_clone_guard(dmn)
     called = []
     monkeypatch.setattr(dmn, "install_signal_handlers", lambda: called.append(True))
     monkeypatch.setattr(dmn, "health_check", lambda: 0)

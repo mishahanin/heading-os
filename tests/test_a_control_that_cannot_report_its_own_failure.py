@@ -872,13 +872,14 @@ def test_status_with_a_live_pid_file_does_not_say_not_running(tmp_path, monkeypa
     assert f"RUNNING pid={os.getpid()}" in out
 
 
-def test_the_status_subcommand_is_wired_to_cmd_status(monkeypatch):
+def test_the_status_subcommand_is_wired_to_cmd_status(monkeypatch, disarm_clone_guard):
     """What the removed subprocess proved, without reading the host.
 
     The old test spawned the real CLI, which is the only reason the dispatch
     table was covered at all. Drive `main()` with a recorded `cmd_status`
     instead: same wiring, no PID file, no machine state.
     """
+    disarm_clone_guard(fbd)
     called = []
     monkeypatch.setattr(fbd, "cmd_status", lambda args: called.append(args))
     monkeypatch.setattr(sys, "argv", ["fireside-bot-daemon.py", "status"])

@@ -1701,6 +1701,14 @@ def cmd_poll(args) -> None:
     Cron: every 5 min.
     Drains queue if 100 updates returned (cap-hit) to prevent 24h retention loss.
     """
+    # Guarded on THIS subcommand rather than in main(), because only this one is
+    # a daemon entry point: it sits in `while True: bot.get_updates(timeout=25)`
+    # and is a long-lived poller whether the fireside daemon drives it or a
+    # human runs it by hand. The other subcommands are ordinary CLI work and
+    # stay open from a worktree. Same shape as the `memory-index build` guard,
+    # and the same reason: a whole-script guard here would refuse reads that
+    # nothing objects to.
+    require_main_clone(__file__)
     bot = get_bot()
     last = load_state(LAST_UPDATE_ID) or {"offset": 0}
     offset = int(last.get("offset", 0))
@@ -2032,6 +2040,7 @@ def _maybe_forward_outsider(bot: "TelegramBot", user_id: int,
 #   sw:b:<rid>:n         - B declined
 
 import secrets as _secrets  # noqa: E402  (module-level import already present elsewhere)
+from scripts.utils.clone_guard import require_main_clone
 
 
 def _tell(bot: TelegramBot, user_id, text: str) -> None:

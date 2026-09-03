@@ -44,6 +44,7 @@ from scripts.utils.pid_liveness import pid_is_running  # noqa: E402
 from scripts.utils.scheduler_defaults import JOB_DEFAULTS  # noqa: E402
 from scripts.utils.trace_filter import install_log_factory  # noqa: E402
 from scripts.utils.workspace import get_default_tz, get_default_tz_name, load_env  # noqa: E402
+from scripts.utils.clone_guard import require_main_clone
 
 # ============================================================
 # Configuration
@@ -364,6 +365,7 @@ def cmd_stop(args) -> None:
 # ============================================================
 
 def main() -> None:
+    require_main_clone(__file__)
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("daemon", help="Run the scheduler forever")

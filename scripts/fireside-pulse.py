@@ -42,6 +42,7 @@ from scripts.utils.workspace import (  # noqa: E402
     get_default_tz, get_default_tz_name, get_outputs_dir, get_datastore_dir,
     resolve_config_with_example,
 )
+from scripts.utils.clone_guard import require_main_clone
 
 WORKSPACE = Path(__file__).resolve().parent.parent
 
@@ -833,6 +834,7 @@ def main():
     # Per-host remote pointer. If .fireside/remote-host exists and names an SSH
     # target, query that host's daemon read-only and report its state instead of
     # the local one. Used on the laptop when fireside lives on the service-host VM.
+    require_main_clone(__file__)
     remote_host_file = WORKSPACE / ".fireside" / "remote-host"
     if remote_host_file.exists():
         host = _remote_host_from(remote_host_file.read_text(encoding="utf-8"))

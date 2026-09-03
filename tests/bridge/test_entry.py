@@ -134,7 +134,7 @@ def test_verify_port_free_rejects_out_of_range(entry_module):
             entry_module._verify_port_free(bad)
 
 
-def test_version_flag_prints_and_exits(entry_module, capsys):
+def test_version_flag_prints_and_exits(entry_module, capsys, disarm_clone_guard):
     """--version prints 'bridge-daemon <version>' and exits 0 (argparse standard)."""
     import importlib
     import scripts.bridge_daemon.version as ver_mod
@@ -154,6 +154,7 @@ def test_version_flag_prints_and_exits(entry_module, capsys):
     # whatever the decorator does, so even a green run would not be testing
     # `main` as production invokes it. The branch was dead today and would have
     # detonated the first time anyone decorated `main`.
+    disarm_clone_guard(entry_module)
     with pytest.raises(SystemExit) as exc:
         _run_main_with_args(entry_module, ["--version"])
     # argparse exits 0 on --version.

@@ -30,6 +30,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+# This script has no `sys.path` preamble of its own, so the workspace root has
+# to go on the path before the one workspace import below. Without it the guard
+# import raised `ModuleNotFoundError` under a bare `/usr/bin/python3` while
+# passing under this repo's `.venv`, whose editable `.pth` makes the root
+# importable -- the failure would have surfaced only on a machine without it.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts.utils.clone_guard import require_main_clone  # noqa: E402
+
 LABEL = "com.31c.bridge-daemon"
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 DAEMON_SCRIPT = WORKSPACE_ROOT / "scripts" / "bridge-daemon.py"
@@ -133,6 +142,7 @@ def uninstall() -> None:
 
 
 def main() -> None:
+    require_main_clone(__file__)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--uninstall", action="store_true",
                         help="remove the launchd agent + plist")

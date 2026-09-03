@@ -861,6 +861,21 @@ def step_summary(identity: dict):
 # ---------------------------------------------------------------------------
 
 def main():
+    # Installs the Sentinel schedule (systemd timer, launchd agent or a Windows
+    # scheduled task, `scripts/utils/schedule.py`), so it is a daemon entry
+    # point. A fresh clone is a MAIN clone -- `.git` is a directory there -- so
+    # setting up a new checkout is unaffected; only a worktree is refused.
+    #
+    # Imported HERE, not at module level: this module's docstring promises a
+    # stdlib-only import surface so it loads on a fresh clone before sys.path is
+    # configured, and a top-level `from scripts.utils...` would break that. This
+    # repo's own .venv carries an editable .pth that makes the root importable,
+    # so the breakage would have been invisible in every local test and would
+    # have appeared only on the fresh exec clone -- the same trap recorded at
+    # `_ensure_workspace_importable`.
+    _ensure_workspace_importable()
+    from scripts.utils.clone_guard import require_main_clone
+    require_main_clone(__file__)
     parser = argparse.ArgumentParser(
         description="31C HEADING OS Workspace Setup",
     )

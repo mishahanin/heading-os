@@ -53,6 +53,7 @@ from scripts.utils.trace_filter import install_log_factory  # noqa: E402
 from scripts.utils.paths import DataRootError, get_data_root  # noqa: E402
 from scripts.utils.untrusted_input import sanitize_untrusted, wrap_untrusted  # noqa: E402
 from scripts.utils.workspace import get_default_tz, get_default_tz_name, get_workspace_root, load_env, resolve_config_with_example  # noqa: E402
+from scripts.utils.clone_guard import require_main_clone
 
 
 def _configure_session_wal(client, busy_timeout_ms=30000):
@@ -3493,6 +3494,7 @@ def launch_daemon(config_path):
 
 
 def main():
+    require_main_clone(__file__)
     parser = argparse.ArgumentParser(description="Sentinel -- Unified Comms Monitor")
     parser.add_argument("--test", action="store_true",
                         help="Run one cycle as a TRUE dry run: notifications are "

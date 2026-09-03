@@ -63,6 +63,7 @@ from scripts.inbox_pulse.paths import get_state_dir  # noqa: E402
 from scripts.inbox_pulse.state import append_jsonl, load_state, save_state, write_heartbeat  # noqa: E402
 from scripts.utils.colors import GREEN, RED, YELLOW, RESET  # noqa: E402
 from scripts.utils.healthchecks import ping as hc_ping  # noqa: E402
+from scripts.utils.clone_guard import require_main_clone
 
 __all__ = [
     "health_check",
@@ -437,6 +438,7 @@ def _main_loop(
 
 def main() -> int:
     """Parse args and dispatch to health_check or run-forever mode."""
+    require_main_clone(__file__)
     parser = argparse.ArgumentParser(
         description="Inbox Pulse daemon -- EWS polling subscription + JSONL event log"
     )

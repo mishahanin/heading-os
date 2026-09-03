@@ -295,13 +295,15 @@ def test_the_guard_can_actually_run_because_os_is_imported():
     assert um.os.name in ("posix", "nt")
 
 
-def test_a_platform_without_fcntl_degrades_instead_of_raising(tmp_path, monkeypatch, capsys):
+def test_a_platform_without_fcntl_degrades_instead_of_raising(tmp_path, monkeypatch, capsys,
+                                                              disarm_clone_guard):
     """The comment promised a named warning and the code delivered an
     AttributeError: `except BlockingIOError` does not catch `None.flock`, so on
     a non-posix host the command was lost with a traceback - the exact outcome
     the lazy import exists to prevent. It was unreachable only because the
     NameError above fired first, so fixing that one made this one live.
     """
+    disarm_clone_guard(um)
     state = tmp_path / "state.json"
     state.write_text(json.dumps({"components": {}}), encoding="utf-8")
     monkeypatch.setattr(um, "state_path", lambda: state)
@@ -374,11 +376,13 @@ def test_the_helper_returns_a_real_module_or_nothing_at_all():
     assert got is None or hasattr(got, "flock")
 
 
-def test_a_busy_lock_is_skipped_not_crashed(tmp_path, monkeypatch, capsys):
+def test_a_busy_lock_is_skipped_not_crashed(tmp_path, monkeypatch, capsys,
+                                            disarm_clone_guard):
     """`flock` raises BlockingIOError when another apply holds the lock, and
     that is a SKIP, not an error: two interleaved applies would snapshot and
     swap the same component. Catching a different exception class turns the
     skip back into a traceback."""
+    disarm_clone_guard(um)
     state = tmp_path / "state.json"
     state.write_text(json.dumps({"components": {}}), encoding="utf-8")
     monkeypatch.setattr(um, "state_path", lambda: state)
@@ -403,8 +407,10 @@ def test_a_busy_lock_is_skipped_not_crashed(tmp_path, monkeypatch, capsys):
     assert "another apply is in progress" in capsys.readouterr().out
 
 
-def test_the_lock_is_still_taken_on_this_platform(tmp_path, monkeypatch, capsys):
+def test_the_lock_is_still_taken_on_this_platform(tmp_path, monkeypatch, capsys,
+                                                  disarm_clone_guard):
     """The degradation must not have become the normal path."""
+    disarm_clone_guard(um)
     state = tmp_path / "state.json"
     state.write_text(json.dumps({"components": {}}), encoding="utf-8")
     monkeypatch.setattr(um, "state_path", lambda: state)

@@ -878,6 +878,49 @@ MAIN_CLONE_SKIP = (
 
 
 @pytest.fixture
+def disarm_clone_guard(monkeypatch):
+    """Neutralise the clone gate for a test whose SUBJECT is not the gate.
+
+    Daemons run in HELM only (operator directive, 2026-09-03), so on 2026-09-03
+    nineteen daemon entry points gained `require_main_clone(__file__)` as the
+    first statement of `main()`. That is correct in production and it turned 25
+    tests red in this worktree at once -- every one of them calling `main()` to
+    ask about something else entirely: whether the status subcommand is wired,
+    whether an unknown flag is rejected, whether a malformed checkpoint raises.
+
+    Those tests are not weakened by disarming the gate. The gate has its own
+    tests, in `tests/test_a_prohibition_written_as_a_list_of_verbs.py`, which
+    assert its presence from the AST and drive real entry points in a real
+    worktree. Leaving it armed here would only mean the suite could not run
+    where the engine work happens, which is the failure
+    `tests/test_a_suite_that_could_not_run_where_the_work_happens.py` exists to
+    name.
+
+    Takes the MODULE, because each guarded script does
+    `from scripts.utils.clone_guard import require_main_clone` and so holds its
+    own reference. Patching `clone_guard.require_main_clone` would leave every
+    one of those bindings pointing at the original, and the test would pass or
+    fail for a reason unrelated to what it did.
+
+        def test_x(disarm_clone_guard):
+            module = _load("scripts/sentinel.py")
+            disarm_clone_guard(module)
+            ...
+
+    NOT for a child process: a subprocess re-imports the real function and this
+    fixture cannot reach it. Use `main_clone_only` there, which skips out loud.
+    """
+    def disarm(module) -> None:
+        assert hasattr(module, "require_main_clone"), (
+            f"{getattr(module, '__name__', module)} holds no reference to "
+            f"require_main_clone, so this fixture would silently do nothing. "
+            f"If the guard moved, point this at where it now lives.")
+        monkeypatch.setattr(module, "require_main_clone", lambda *a, **k: None)
+
+    return disarm
+
+
+@pytest.fixture
 def main_clone_only():
     """Skip, out loud, when the suite is not running in the main clone.
 

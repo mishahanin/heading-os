@@ -72,6 +72,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.workspace import get_workspace_root
+from scripts.utils.clone_guard import require_main_clone
 
 STALE_DEFAULT_S = 120
 
@@ -577,6 +578,7 @@ def _classify_fleet_exit_code(
 
 
 def main(argv: list[str] | None = None) -> int:
+    require_main_clone(__file__)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="emit a JSON report instead of the grid")
     parser.add_argument("--stale", type=int, default=STALE_DEFAULT_S,

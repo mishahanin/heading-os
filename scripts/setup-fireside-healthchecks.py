@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.healthchecks_setup import run_setup  # noqa: E402
 from scripts.utils.paths import load_env  # noqa: E402
 from scripts.utils.workspace import get_default_tz_name, get_workspace_root  # noqa: E402
+from scripts.utils.clone_guard import require_main_clone
 
 def build_checks() -> list:
     """The five checks, built AFTER .env is loaded.
@@ -79,6 +80,7 @@ def build_checks() -> list:
 
 
 def main() -> None:
+    require_main_clone(__file__)
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

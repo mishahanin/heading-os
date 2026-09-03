@@ -52,6 +52,7 @@ from scripts.utils.workspace import (  # noqa: E402
     get_workspace_root,
     load_env,
 )
+from scripts.utils.clone_guard import require_main_clone
 
 # ============================================================
 # Configuration
@@ -562,6 +563,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    require_main_clone(__file__)
     args = build_parser().parse_args(argv)
     root = get_workspace_root()
     load_env(root)

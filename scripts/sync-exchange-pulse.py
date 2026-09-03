@@ -28,6 +28,7 @@ WORKSPACE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKSPACE))
 
 from scripts.utils.pid_liveness import pid_is_running  # noqa: E402
+from scripts.utils.clone_guard import require_main_clone
 
 RUNTIME_DIR = WORKSPACE / ".sync-exchange"
 PID_FILE = RUNTIME_DIR / "daemon.pid"
@@ -203,6 +204,7 @@ def main():
     # Force UTF-8 on stdout so emoji + non-ASCII log lines don't crash on
     # Windows. Done here (not at import time) so importing this module is a
     # pure, side-effect-free operation — tests load it by path.
+    require_main_clone(__file__)
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
     alive, pid = _daemon_alive()
     if not alive:

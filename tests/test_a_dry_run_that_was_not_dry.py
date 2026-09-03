@@ -311,9 +311,16 @@ def test_every_failed_escalation_site_hands_back_to_the_loop():
         f"mark_invite_processed, which is the loss the log line describes")
 
 
-def test_the_help_text_no_longer_promises_only_muted_notifications():
+def test_the_help_text_no_longer_promises_only_muted_notifications(main_clone_only):
     """Rendered, not grepped: the string is split across source lines, and the
-    thing that must be true is what the operator READS."""
+    thing that must be true is what the operator READS.
+
+    Runs `sentinel.py` as a CHILD, which is what makes it a rendering test
+    rather than a source read -- and also what puts it out of reach of
+    `disarm_clone_guard`: the child re-imports the real `require_main_clone`
+    and exits 2 before argparse prints anything. Gated on the main clone
+    rather than patched, per `main_clone_only`.
+    """
     import subprocess
     out = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "sentinel.py"), "--help"],

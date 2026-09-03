@@ -37,6 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.healthchecks_setup import run_setup  # noqa: E402
+from scripts.utils.clone_guard import require_main_clone
 
 CHECKS = [
     {
@@ -59,6 +60,7 @@ CHECKS = [
 
 
 def main() -> None:
+    require_main_clone(__file__)
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

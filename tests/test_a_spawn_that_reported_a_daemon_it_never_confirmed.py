@@ -170,7 +170,8 @@ def test_a_stale_pid_file_over_a_dead_process_is_not_a_started_daemon(
 # ============================================================
 
 def test_a_checkpoint_missing_started_uids_does_not_raise(fp, tmp_path, monkeypatch,
-                                                           capsys):
+                                                           capsys, disarm_clone_guard):
+    disarm_clone_guard(fp)
     # WORKSPACE too: without it `main()` finds the REAL `.fireside/remote-host`
     # in this workspace and takes the remote path instead of the local one.
     monkeypatch.setattr(fp, "WORKSPACE", tmp_path / "ws")
@@ -183,7 +184,9 @@ def test_a_checkpoint_missing_started_uids_does_not_raise(fp, tmp_path, monkeypa
     assert "started" in capsys.readouterr().out
 
 
-def test_an_empty_checkpoint_dict_does_not_raise(fp, tmp_path, monkeypatch, capsys):
+def test_an_empty_checkpoint_dict_does_not_raise(fp, tmp_path, monkeypatch, capsys,
+                                                 disarm_clone_guard):
+    disarm_clone_guard(fp)
     # WORKSPACE too: without it `main()` finds the REAL `.fireside/remote-host`
     # in this workspace and takes the remote path instead of the local one.
     monkeypatch.setattr(fp, "WORKSPACE", tmp_path / "ws")
@@ -197,7 +200,9 @@ def test_an_empty_checkpoint_dict_does_not_raise(fp, tmp_path, monkeypatch, caps
     assert "no news" in out or "pulse" in out
 
 
-def test_a_populated_prior_still_produces_a_delta(fp, tmp_path, monkeypatch, capsys):
+def test_a_populated_prior_still_produces_a_delta(fp, tmp_path, monkeypatch, capsys,
+                                                  disarm_clone_guard):
+    disarm_clone_guard(fp)
     state = tmp_path / "state"
     state.mkdir()
     (state / "sessions.jsonl").write_text(
@@ -214,7 +219,7 @@ def test_a_populated_prior_still_produces_a_delta(fp, tmp_path, monkeypatch, cap
 
 
 def test_a_uid_already_in_the_prior_is_not_reported_as_new_again(
-        fp, tmp_path, monkeypatch, capsys):
+        fp, tmp_path, monkeypatch, capsys, disarm_clone_guard):
     """The guard must not cost the subtraction it guards.
 
     `prior.get("started_uids", [])` replaced a direct index, and a `.get`
@@ -223,6 +228,7 @@ def test_a_uid_already_in_the_prior_is_not_reported_as_new_again(
     turning a delta report into a roster dump and burying the one arrival
     that actually happened.
     """
+    disarm_clone_guard(fp)
     state = tmp_path / "state"
     state.mkdir()
     (state / "sessions.jsonl").write_text(
@@ -270,8 +276,10 @@ def test_the_host_is_stripped(fp):
 
 def test_a_commented_pointer_reaches_the_remote_path_not_the_spawn(fp, tmp_path,
                                                                     monkeypatch,
-                                                                    capsys):
+                                                                    capsys,
+                                                                    disarm_clone_guard):
     """The whole point: this used to fall through and spawn a local daemon."""
+    disarm_clone_guard(fp)
     monkeypatch.setattr(fp, "WORKSPACE", tmp_path)
     (tmp_path / ".fireside").mkdir()
     (tmp_path / ".fireside" / "remote-host").write_text(

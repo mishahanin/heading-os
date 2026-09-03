@@ -192,6 +192,34 @@ recording: the overlay has one git index shared by HELM and every worktree, so a
 commit from a task sweeps up a neighbour's half-finished draft and whatever the
 mail sync is writing at that instant into a single commit nobody reviewed.
 
+### Daemons are HELM's alone
+
+Operator directive, 2026-09-03. From a YARD, take no action after which a
+running process on this machine appears, disappears, or changes behaviour. That
+category is the rule; starting, installing and restarting are examples of it and
+not a list to implement. It reaches the daemon and everything deciding whether
+it runs: unit, timer, healthcheck, PID file, spawner, and the readers that
+inspect one in order to decide. Every daemon entry point in the tree therefore
+carries the clone guard, including the ones that only read.
+
+The line runs through EXECUTION, not through editing. Writing the SOURCE CODE of
+a daemon in a YARD is ordinary engine work; that is what a YARD is for, and HELM
+does not change engine code at all. The guard refuses to RUN from a non-main
+clone and does not touch the file. That code reaches HELM by one route, the
+merge of the task branch, and that merge has to happen before the worktree is
+deleted.
+
+The categorical form is a repair, not a preference, and the repair is the reason
+the paragraph above refuses to be a list. `CLAUDE.md` used to forbid "daemon
+install, restart or uninstall", and exactly the three scripts carrying those
+words in their filenames were guarded. The prohibition had been implemented as a
+match against a list of verbs, "start" was not on the list, and so a YARD could
+not install the mail daemon but could start one. MEASURED
+2026-09-03: a second Exchange daemon ran twelve hours out of a worktree beside
+the operator's real one, auto-spawned because liveness is read from a PID file
+INSIDE the checkout and a fresh worktree has none — so the HELM service was
+invisible to the check that decided to "helpfully" start another.
+
 ### The gap parallel work opens, and how it is closed
 
 The engine's layers that keep private data out of the code all run on this

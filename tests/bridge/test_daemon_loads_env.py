@@ -23,7 +23,7 @@ def _load_daemon_module():
     return mod
 
 
-def test_main_loads_env_before_dispatch(monkeypatch):
+def test_main_loads_env_before_dispatch(monkeypatch, disarm_clone_guard):
     """The ORDER, not just the fact.
 
     This recorded a single boolean and asserted it after `main()` returned,
@@ -36,6 +36,7 @@ def test_main_loads_env_before_dispatch(monkeypatch):
     thing measured.
     """
     mod = _load_daemon_module()
+    disarm_clone_guard(mod)
     order: list[str] = []
     monkeypatch.setattr(mod, "load_env", lambda *a, **k: order.append("load_env"))
     # Stub the dispatch target so main() returns without starting a server.

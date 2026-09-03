@@ -45,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.ollama_host import probe as probe_host
 from scripts.utils.ops_signals import ollama_hosts_in_use
+from scripts.utils.clone_guard import require_main_clone
 
 # How long to wait for the application to bind after launching it. The Windows
 # desktop app loads its settings and opens a tray icon before it listens;
@@ -156,6 +157,7 @@ def ensure_up(
 
 
 def main() -> int:
+    require_main_clone(__file__)
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("command", choices=("check", "heal"), nargs="?", default="check")
     parser.add_argument("--json", action="store_true", help="machine-readable result")

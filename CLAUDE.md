@@ -92,11 +92,46 @@ recorded says so and stops.
 
 **Never from a YARD:** editing anything inside HELM; `git push` (this repository
 is public, so any branch pushed is visible immediately, not only `main`);
-daemon install, restart or uninstall; `scripts/push-all.py`, `/backup`;
-maintenance passes that write under the data root. These refuse mechanically
-rather than by instruction — see `scripts/utils/clone_guard.py`,
+**anything at all to do with a running daemon** (see below); `scripts/push-all.py`,
+`/backup`; maintenance passes that write under the data root. These refuse
+mechanically rather than by instruction — see `scripts/utils/clone_guard.py`,
 `scripts/lib/require-main-clone.sh`, and `check_yard_write_guard` in
 `.claude/hooks/_dispatch.py`.
+
+**Daemons run in HELM. All of them, always.** Operator directive, 2026-09-03.
+
+**The category, and it is the whole rule:** from a YARD, take no action after
+which a running process on this machine appears, disappears, or changes
+behaviour. That is the test to apply — not a list. It covers the daemon itself
+and everything that decides whether it runs: its unit, its timer, its
+healthcheck, its PID file, anything that spawns it, and anything that inspects
+it in order to decide. The rule is categorical rather than proportional to
+risk, so a daemon entry point that only READS is guarded too. Examples, and
+this list is deliberately **not exhaustive and must never be read as the
+rule**: starting, installing, restarting, stopping, removing.
+
+**The line runs through EXECUTION, not through editing.** Writing the SOURCE
+CODE of a daemon in a YARD is ordinary engine work and is exactly what a YARD is
+for — HELM does not change engine code at all. The guard sits at the entry
+point and refuses to RUN from a non-main clone; it does not and must not stop
+you opening that same file in an editor.
+
+That code reaches HELM by ONE route, the merge of the task branch into `main`,
+and **that merge must happen before the YARD is deleted** — a daemon change left
+in a deleted worktree is lost, and one arriving in HELM by any other route
+bypassed review.
+
+Why the previous wording failed, recorded here because the fix is prose as much
+as code. This list used to say "daemon install, restart or uninstall", and
+exactly three files carried those words in their names:
+`install-daemon-service.sh`, `restart-daemon-service.sh`,
+`uninstall-daemon-service.sh`. Those three were guarded and nothing else was.
+The prohibition had been implemented as a literal match against a list of verbs,
+and "start" was not on the list — so from a YARD you could not INSTALL the mail
+daemon and could freely START one. That is what happened on 2026-09-03, when a
+second Exchange daemon ran twelve hours out of a worktree beside the operator's
+real one. **An enumeration of verbs is a list of holes.** Whoever edits this
+next: do not turn the examples above back into the rule.
 
 **When engine work comes up during a HELM session:** name what you would change
 and in which files, then stop, and say it belongs in a YARD task. This holds for

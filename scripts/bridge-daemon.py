@@ -43,6 +43,7 @@ from scripts.bridge_daemon.watcher import start_observer
 from scripts.utils import daemon_heartbeat
 from scripts.utils import tracing
 from scripts.utils.trace_filter import install_log_factory
+from scripts.utils.clone_guard import require_main_clone
 
 LOG_PATH = WORKSPACE_ROOT / ".daemon-state" / "bridge.log"
 
@@ -1148,6 +1149,7 @@ def main():
     # the daemon is launched by systemd/launchd with no inherited environment. Without
     # this, get_default_tz_name() falls back to UTC and the dashboard renders the wrong
     # time-of-day greeting, tz label, and meeting countdowns. Mirrors the other daemons.
+    require_main_clone(__file__)
     load_env(WORKSPACE_ROOT)
     from scripts.bridge_daemon.version import __version__ as _DAEMON_VERSION
     ap = argparse.ArgumentParser()

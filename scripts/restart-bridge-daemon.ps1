@@ -8,6 +8,25 @@
 $ErrorActionPreference = "Continue"
 
 $workspaceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+
+# Daemons are HELM's alone (CLAUDE.md, HELM and YARD). This restarts one, so it
+# refuses from a worktree. The predicate is the same one clone_guard.py and
+# lib/require-main-clone.sh use and is a property of git rather than an
+# agreement: <root>/.git is a DIRECTORY in the main clone and a plain FILE (a
+# `gitdir:` pointer) in a worktree. Written in PowerShell builtins because this
+# script runs on Windows, where neither of the other two guards is reachable.
+$gitPath = Join-Path $workspaceRoot ".git"
+if (Test-Path -LiteralPath $gitPath -PathType Leaf) {
+    Write-Error ("restart-bridge-daemon.ps1: refusing to run from a worktree. " +
+                 "$workspaceRoot is a YARD, not the main clone. Daemons are " +
+                 "started, stopped and restarted from HELM only.")
+    exit 2
+}
+if (-not (Test-Path -LiteralPath $gitPath -PathType Container)) {
+    Write-Error ("restart-bridge-daemon.ps1: cannot tell whether $workspaceRoot " +
+                 "is the main clone (no .git there). Refusing.")
+    exit 2
+}
 $daemonScript = Join-Path $workspaceRoot "scripts\bridge-daemon.py"
 $launcherBat = Join-Path $workspaceRoot "scripts\launch-bridge-daemon.bat"
 

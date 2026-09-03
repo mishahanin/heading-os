@@ -299,7 +299,7 @@ def test_verdict_config_drift():
 # drift correctly.
 
 
-def test_main_end_to_end_flags_config_drift(monkeypatch, tmp_path, capsys):
+def test_main_end_to_end_flags_config_drift(monkeypatch, tmp_path, capsys, disarm_clone_guard):
     """End-to-end: workspace has a heartbeat.json with old config_loaded_version
     and a corporate/daemon/config.yaml at a newer version. main() must:
     - Read both
@@ -339,6 +339,7 @@ def test_main_end_to_end_flags_config_drift(monkeypatch, tmp_path, capsys):
     # synthetic workspace so main() reads from it.
     monkeypatch.setattr(fh, "_candidate_workspaces", lambda: [(workspace, "local")])
     monkeypatch.setattr(fh, "get_workspace_root", lambda: workspace)
+    disarm_clone_guard(fh)
 
     exit_code = fh.main(["--json", "--exit-zero"])
     assert exit_code == 0  # --exit-zero forces 0 regardless of fleet posture
@@ -353,7 +354,7 @@ def test_main_end_to_end_flags_config_drift(monkeypatch, tmp_path, capsys):
     assert workspaces[0]["config_loaded_version"] == "3"
 
 
-def test_main_end_to_end_classifies_ok_when_versions_match(monkeypatch, tmp_path, capsys):
+def test_main_end_to_end_classifies_ok_when_versions_match(monkeypatch, tmp_path, capsys, disarm_clone_guard):
     """Counter-test: same setup but heartbeat's config_loaded_version
     matches the corporate config. The workspace must classify as 'ok',
     not 'config-drift'."""
@@ -382,6 +383,7 @@ def test_main_end_to_end_classifies_ok_when_versions_match(monkeypatch, tmp_path
 
     monkeypatch.setattr(fh, "_candidate_workspaces", lambda: [(workspace, "local")])
     monkeypatch.setattr(fh, "get_workspace_root", lambda: workspace)
+    disarm_clone_guard(fh)
 
     fh.main(["--json", "--exit-zero"])
     out = _json.loads(capsys.readouterr().out)
@@ -389,7 +391,7 @@ def test_main_end_to_end_classifies_ok_when_versions_match(monkeypatch, tmp_path
     assert "healthy" in out["verdict"].lower()
 
 
-def test_main_exit_code_signals_drift_when_config_drifted(monkeypatch, tmp_path, capsys):
+def test_main_exit_code_signals_drift_when_config_drifted(monkeypatch, tmp_path, capsys, disarm_clone_guard):
     """Without --exit-zero, main() returns 1 (drift bucket) when any
     workspace classifies as config-drift."""
     import json as _json
@@ -417,6 +419,7 @@ def test_main_exit_code_signals_drift_when_config_drifted(monkeypatch, tmp_path,
 
     monkeypatch.setattr(fh, "_candidate_workspaces", lambda: [(workspace, "local")])
     monkeypatch.setattr(fh, "get_workspace_root", lambda: workspace)
+    disarm_clone_guard(fh)
 
     exit_code = fh.main(["--json"])
     # Drift bucket (1), not healthy (0) or broken (2).

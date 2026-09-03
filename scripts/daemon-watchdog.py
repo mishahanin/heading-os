@@ -34,6 +34,7 @@ from scripts.utils import tracing
 from scripts.utils.colors import BOLD, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.trace_filter import attach
 from scripts.utils.workspace import get_workspace_root
+from scripts.utils.clone_guard import require_main_clone
 
 _STATUS_COLOR = {"ok": GREEN, "silent": YELLOW, "missing": RED}
 
@@ -63,6 +64,7 @@ def _print_grid(report: dict) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    require_main_clone(__file__)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--once", action="store_true",
                         help="run a single pass (the default and only mode)")

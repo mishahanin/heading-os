@@ -25,6 +25,7 @@ from scripts.utils.update_registry import Component, load_registry  # noqa: E402
 from scripts.utils.update_common import resolve_current, versions_differ, write_state  # noqa: E402
 from scripts.utils import update_sources  # noqa: E402
 from scripts.utils.workspace import get_outputs_dir, get_workspace_root  # noqa: E402
+from scripts.utils.clone_guard import require_main_clone
 
 
 def registry_path() -> Path:
@@ -164,6 +165,7 @@ def _import_fcntl():
 
 
 def main(argv: list[str] | None = None) -> int:
+    require_main_clone(__file__)
     parser = argparse.ArgumentParser(description="Workspace update manager")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("check")

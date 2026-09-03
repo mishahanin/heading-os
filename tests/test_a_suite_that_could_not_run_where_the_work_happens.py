@@ -71,6 +71,13 @@ CLONE_GATED_SKIPS = {
     "tests/test_a_flag_the_code_never_read.py": 2,
     "tests/test_timer_timezone.py": 1,
     "tests/test_a_bootstrap_that_could_not_be_run_twice.py": 1,
+    # Added 2026-09-03 with the daemon clone gates. All three spawn
+    # `scripts/sentinel.py` as a CHILD, so the child re-imports the real guard
+    # and `disarm_clone_guard` cannot reach it; each asserts on the script AS
+    # INVOKED (rendered --help, argparse's "unrecognized arguments"), so
+    # converting the call to an in-process `main()` would change the subject.
+    "tests/test_three_promises_the_code_could_not_keep.py": 2,
+    "tests/test_a_dry_run_that_was_not_dry.py": 1,
 }
 CLONE_GATED_FILES = set(CLONE_GATED_SKIPS)
 
@@ -143,6 +150,47 @@ def test_the_gated_files_all_request_the_fixture():
     assert not missing, missing
 
 
+def test_no_file_uses_the_fixture_without_appearing_in_the_map():
+    """The direction that was missing, and its absence cost a real undercount.
+
+    The forward check above asks "does every mapped file request the fixture?".
+    Nothing asked the reverse, so a NEW user of `main_clone_only` was invisible
+    to the count. MEASURED 2026-09-03: adding the daemon clone gates sent three
+    more tests through the fixture, across two files in neither the map nor any
+    assertion, and the pinned total stayed green while under-counting by three.
+    A skip nobody counts is a green suite that checks nothing, which is the
+    whole premise of this file.
+
+    Asked of the AST -- a test's PARAMETER list -- so the prose above, which
+    names the fixture repeatedly, is not mistaken for a use of it.
+    """
+    escaped = []
+    scanned = 0
+    for rel, text in _test_sources():
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        scanned += 1
+        uses = any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name.startswith("test_")
+            and any(a.arg == "main_clone_only" for a in node.args.args)
+            for node in ast.walk(tree))
+        if uses and rel not in CLONE_GATED_SKIPS:
+            escaped.append(rel)
+
+    # A floor: with no sources read this passes over a suite it never opened.
+    # MEASURED 2026-09-03: 9 mapped files, and the tree holds far more tests.
+    assert scanned >= 500, f"only {scanned} test module(s) parsed"
+    assert len(CLONE_GATED_SKIPS) == 9, sorted(CLONE_GATED_SKIPS)
+
+    assert not escaped, (
+        f"these request `main_clone_only` and are absent from "
+        f"CLONE_GATED_SKIPS, so their skips are counted by nothing: {escaped}. "
+        f"Add each with its measured skip count and raise the total below.")
+
+
 # ============================================================
 # The count, pinned
 # ============================================================
@@ -150,8 +198,8 @@ def test_the_gated_files_all_request_the_fixture():
 def test_the_clone_gated_skips_are_what_was_measured():
     """The numbers, not the intention, and per file rather than in total.
 
-    Driven as a child run over the seven files, reading pytest's own skip
-    report. MEASURED 2026-09-03 from this YARD: 18 in all, distributed as
+    Driven as a child run over the nine files, reading pytest's own skip
+    report. MEASURED 2026-09-03 from this YARD: 22 in all, distributed as
     `CLONE_GATED_SKIPS` above. From the main clone the same run skips none of
     them, and that direction is asserted rather than assumed.
     """
@@ -186,7 +234,7 @@ def test_the_clone_gated_skips_are_what_was_measured():
     # CLONE_GATED_SKIPS would still satisfy `seen == CLONE_GATED_SKIPS` if the
     # same typo were made twice. The total is an independent copy of the same
     # measurement.
-    assert sum(seen.values()) == 19
+    assert sum(seen.values()) == 22
 
 
 def test_the_hook_cases_run_rather_than_skip():

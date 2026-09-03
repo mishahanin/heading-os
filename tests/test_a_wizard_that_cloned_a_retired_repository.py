@@ -156,6 +156,27 @@ def _sandbox(tmp_path: Path) -> Path:
         "def install_sentinel_schedule(*a, **k):\n"
         "    raise AssertionError('the sandbox must never install a schedule')\n",
         encoding="utf-8")
+
+    # `main()` calls `require_main_clone(__file__)` before argparse, so the
+    # sandbox needs the module to exist at all -- without it the wizard died at
+    # import with ModuleNotFoundError and never reached step 7.
+    #
+    # A STUB, not a copy of the real one, and the difference is the point. The
+    # sandbox root is `tmp_path/ws`, which is not a git checkout of anything,
+    # so the real predicate cannot answer and `require_main_clone` refuses
+    # rather than guesses -- exit 2, again before step 7. Copying the real
+    # module would therefore trade one silent non-run for another.
+    #
+    # Nothing is weakened by the stub: what this file measures is whether the
+    # wizard CREATES a retired repository, and the clone gate carries its own
+    # bidirectional tests in tests/test_clone_guard.py and
+    # tests/test_a_prohibition_written_as_a_list_of_verbs.py. `git` here is a
+    # shim on a stripped PATH in any case, so no real clone-type answer was
+    # ever available inside this sandbox.
+    (ws / "scripts" / "utils" / "clone_guard.py").write_text(
+        "def require_main_clone(script_path):\n"
+        "    return None\n",
+        encoding="utf-8")
     return ws
 
 

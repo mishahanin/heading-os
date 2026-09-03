@@ -110,12 +110,17 @@ def test_the_extractors_actually_see_both_sides():
     assert {"--check", "--test", "--status", "--stop"} <= _sentinel_flags()
 
 
-def test_sentinel_accepts_the_flag_when_actually_run():
+def test_sentinel_accepts_the_flag_when_actually_run(main_clone_only):
     """The AST says the flag is registered; this proves argparse takes it.
 
     `--check` with no config still parses; it fails later on connection setup,
     which is not what is under test. The old behaviour was exit 2 with
     "unrecognized arguments" BEFORE any of that.
+
+    Spawned rather than called, because the claim is about the script as
+    invoked. A child re-imports the real `require_main_clone`, which exits 2
+    from a worktree before argparse runs, and no in-process patch reaches it --
+    so this is gated on the main clone by `main_clone_only`.
     """
     proc = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "sentinel.py"), "--check", "--help"],
@@ -127,9 +132,13 @@ def test_sentinel_accepts_the_flag_when_actually_run():
     assert "unrecognized arguments" not in proc.stderr
 
 
-def test_an_unknown_flag_is_still_rejected():
+def test_an_unknown_flag_is_still_rejected(main_clone_only):
     """The negative case. A parser that accepts everything would pass the test
-    above while accepting the typo that caused this."""
+    above while accepting the typo that caused this.
+
+    Same child-process gate as the positive case above, and for the same
+    reason: exit 2 from the clone guard is indistinguishable from exit 2 from
+    argparse, so this must run where the guard passes."""
     proc = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "sentinel.py"), "--chekc"],
         capture_output=True, text=True, timeout=120,

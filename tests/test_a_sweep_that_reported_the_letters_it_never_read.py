@@ -619,7 +619,7 @@ def _state(**over):
 
 
 def test_a_shaped_prior_checkpoint_does_not_kill_main(fp, tmp_path, monkeypatch,
-                                                      capsys):
+                                                      capsys, disarm_clone_guard):
     """The defect as reported, driven through `main` rather than the helper.
 
     Run one sets a baseline; run two is handed a checkpoint whose entries carry
@@ -627,6 +627,7 @@ def test_a_shaped_prior_checkpoint_does_not_kill_main(fp, tmp_path, monkeypatch,
     `save_checkpoint`, so the tool printed no status and never re-baselined:
     every later run died the same way until the file was deleted by hand.
     """
+    disarm_clone_guard(fp)
     prior = {"started_uids": [], "swap_events": [{"ts": "2026-01-01"}],
              "tribe_joins": [{"ts": "2026-01-02"}]}
     state = _state(swap_events=[["2026-01-03", "ann"]],
@@ -642,8 +643,9 @@ def test_a_shaped_prior_checkpoint_does_not_kill_main(fp, tmp_path, monkeypatch,
 
 
 def test_a_short_prior_entry_does_not_kill_main(fp, tmp_path, monkeypatch,
-                                                capsys):
+                                                capsys, disarm_clone_guard):
     """The IndexError half, at the same call sites."""
+    disarm_clone_guard(fp)
     prior = {"started_uids": [], "swap_events": [["2026-01-01"]],
              "tribe_joins": [["2026-01-02"]]}
     _pulse_main(fp, tmp_path, monkeypatch, prior,
@@ -653,8 +655,10 @@ def test_a_short_prior_entry_does_not_kill_main(fp, tmp_path, monkeypatch,
 
 def test_a_well_formed_prior_still_suppresses_what_it_already_saw(fp, tmp_path,
                                                                   monkeypatch,
-                                                                  capsys):
+                                                                  capsys,
+                                                                  disarm_clone_guard):
     """Or the widening above is just "report every event as new, every run"."""
+    disarm_clone_guard(fp)
     prior = {"started_uids": [], "swap_events": [["2026-01-03", "ann"]],
              "tribe_joins": []}
     _pulse_main(fp, tmp_path, monkeypatch, prior,
@@ -754,8 +758,9 @@ def test_the_operator_is_told_once_when_the_roster_cannot_be_read(fp, tmp_path,
 
 
 def test_main_prints_the_roster_sized_denominator(fp, tmp_path, monkeypatch,
-                                                  capsys):
+                                                  capsys, disarm_clone_guard):
     """End to end on the line the operator actually reads."""
+    disarm_clone_guard(fp)
     _roster_dir(fp, tmp_path, monkeypatch,
                 '{"a": {"name": "A"}, "b": {"name": "B"}, '
                 '"c": {"name": "C", "telegram_user_id": 42}}')

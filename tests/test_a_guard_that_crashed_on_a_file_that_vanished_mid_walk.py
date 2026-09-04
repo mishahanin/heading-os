@@ -483,6 +483,7 @@ def _live_sites() -> dict[str, list[tuple[int, str]]]:
     return sites
 
 
+@pytest.mark.corpus
 def test_no_walk_then_read_is_left_unprotected():
     """The headline. A read of a walked path must survive the file vanishing.
 

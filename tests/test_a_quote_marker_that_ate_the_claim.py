@@ -383,6 +383,7 @@ def test_the_staleness_rule_is_silent_when_every_declaration_is_live():
     assert stale_declarations(_SYNTHETIC_REGISTRY, live_strip_sites(_SYNTHETIC)) == []
 
 
+@pytest.mark.corpus
 def test_the_sweep_reaches_a_real_corpus():
     """Green over an empty corpus otherwise. 900+ files on 2026-08-29.
 
@@ -396,6 +397,7 @@ def test_the_sweep_reaches_a_real_corpus():
     assert any(rel.endswith("md-to-docx-competitive.py") for rel, _ in corpus)
 
 
+@pytest.mark.corpus
 def test_every_directional_strip_of_a_character_set_is_declared():
     """A new one must be argued for, not inherited.
 
@@ -410,6 +412,7 @@ def test_every_directional_strip_of_a_character_set_is_declared():
         "set is the right semantics:\n  " + "\n  ".join(undeclared))
 
 
+@pytest.mark.corpus
 def test_the_registry_does_not_outlive_its_sites():
     """A registry naming a site that no longer carries the shape waves through
     whatever is written at that path next."""

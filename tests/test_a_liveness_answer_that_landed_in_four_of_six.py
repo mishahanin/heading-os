@@ -362,12 +362,14 @@ def _corpus() -> list[tuple[str, str]]:
                 tracked_python_files(("scripts", ".claude", "tests")))]
 
 
+@pytest.mark.corpus
 def test_the_sweep_reaches_a_real_corpus():
     corpus = _corpus()
     assert len(corpus) > 500, f"only {len(corpus)} sources read"
     assert any(rel.endswith("pid_liveness.py") for rel, _ in corpus)
 
 
+@pytest.mark.corpus
 def test_no_module_asks_liveness_for_itself():
     undeclared = sorted({site.split(":")[0] for site in liveness_probe_sites(_corpus())}
                         - set(DECLARED_LIVENESS_SITES))
@@ -426,6 +428,7 @@ def test_the_import_check_passes_a_module_that_delegates():
         "from scripts.utils.pid_liveness import pid_is_running\n") is True
 
 
+@pytest.mark.corpus
 def test_the_declaration_list_does_not_outlive_its_sites():
     stale = stale_declarations(DECLARED_LIVENESS_SITES, liveness_probe_sites(_corpus()))
     assert stale == [], f"declared liveness sites that no longer exist: {stale}"

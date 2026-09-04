@@ -102,6 +102,7 @@ def _collect_and_report(driver_dir: Path, cwd: Path, *targets: str
 
 
 @pytest.mark.slow
+@pytest.mark.corpus
 def test_collecting_the_whole_suite_leaves_sys_path_as_it_found_it(tmp_path):
     """The guard. Importing every test module must add nothing to `sys.path`.
 

@@ -24,6 +24,24 @@ is now a re-export of this module.
 Callers pass glob patterns relative to the repository root; `**` matches zero or
 more directories, so `scripts/**/*.py` covers `scripts/a.py` as well as
 `scripts/utils/a.py`.
+
+DO NOT ADD A SHARED-CORPUS FIXTURE HERE. It is the obvious optimisation -- a
+dozen sweeps each walk this tree and read every file, so read it once and hand
+the result to all of them -- and it is worth almost nothing. MEASURED 2026-09-04
+over the 1547 tracked `.py` files of this repository, single process:
+
+    walk (git ls-files + glob)   0.14 s
+    read every file              0.11 s
+    ast.parse every file        25.19 s
+    one ast.walk over the result 6.94 s
+
+The walk and the read together are 0.25 s, under one percent. Sharing them
+saves 0.25 s. What costs is PARSING, and a session-scoped fixture cannot share
+that either: under `-n auto` the sweeps sit in different test FILES, xdist
+hands those to different worker PROCESSES, and each worker has its own session,
+so a session fixture is built once per worker per file group rather than once.
+Both halves are written down because the proposal arrives about once a quarter
+and the walk-is-the-cost half is the intuitive and wrong one.
 """
 from __future__ import annotations
 

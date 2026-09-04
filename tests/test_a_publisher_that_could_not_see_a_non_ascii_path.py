@@ -426,6 +426,7 @@ def test_the_scanner_ignores_a_partly_dynamic_argv_rather_than_misreading_it() -
         ast.parse('subprocess.run(["git", flag, "ls-files"])'))) == []
 
 
+@pytest.mark.corpus
 def test_no_engine_reader_enumerates_paths_without_the_nul_separator() -> None:
     """The whole class, held down once.
 

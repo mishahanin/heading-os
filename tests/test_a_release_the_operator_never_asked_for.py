@@ -771,6 +771,7 @@ _UNDERIVED_BUT_KEPT = {
 }
 
 
+@pytest.mark.corpus
 def test_every_push_capable_script_in_the_repo_is_covered_by_the_wall():
     """The durable half of the fail-open fix.
 

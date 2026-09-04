@@ -210,6 +210,60 @@ uv run python scripts/run-tests.py                      # the suite
   On a clone with no private overlay, a file documented only there reads as
   undocumented.
 
+### Day mode: run only the tests a change can reach
+
+The full suite is large, and every worker pays its collection cost. During the
+working day, run a selection instead:
+
+```bash
+uv run python scripts/day-mode.py select    # what would run, and by which route
+uv run python scripts/day-mode.py run       # run the selection
+uv run python scripts/day-mode.py blind     # files no route can select
+uv run python scripts/day-mode.py nightly   # the night side of the contract
+```
+
+Day mode is never the default. The pre-push gate and CI still run the whole
+suite. The operator decides, per run, whether to use day mode.
+
+Read the module docstring in `scripts/utils/day_mode.py` before you trust a
+selection. It states, in full, what day mode can miss.
+
+A test file arrives by one of six routes. It is itself a changed test. A changed
+`conftest.py` selects its subtree. A module a conftest imports, or a data file a
+conftest names, selects that subtree too. An import edge reaches it. A string
+constant inside it names the changed file. Or it sits in the mandatory core.
+
+The conftest routes matter more than they look. Pytest loads a conftest for
+every test beneath it, and never through an import statement, so no edge runs
+from a test file to it. A change to anything `tests/conftest.py` reaches
+therefore selects the whole suite. Measured 2026-09-04: a change to
+`scripts/utils/workspace.py` selects 1079 of 1079 files. That is the correct
+answer, not a limitation. Such a change can break any test. Day mode prints the
+share so you can see it saved nothing, and run the full suite instead.
+
+The literal route carries the most weight here. Many tests drive a script as a
+subprocess, so no import edge to it exists. `codegraph affected` reports zero
+tests for `.claude/hooks/_dispatch.py` for that reason, and fifteen of the
+sixteen files under `.claude/hooks/` behave the same way. The literal route
+selects 39 tests for that file.
+
+Note the trap if you reach for `codegraph affected` yourself. Its filter
+partitions the corpus, and no single value returns the whole answer. Measured
+2026-09-04 against `scripts/utils/supervise.py`: `--filter "tests/**/*.py"`
+returns 122 files, all in subdirectories. `--filter "tests/**"` returns 14, all
+directly in `tests/`. No filter at all returns zero.
+
+The two sets do not overlap. Make both calls and union them yourself. Repeating
+the flag does not union: `--filter A --filter B` returns only B. A comma list
+and a brace list each return zero, silently.
+
+Day mode derives the mandatory core; nobody writes it by hand. The core is every
+test that reads the repository tree. Any change alters what those tests see, and
+no edge names them. Measured 2026-09-04: 155 of 1079 test files.
+
+The night must run the full suite, and it must fail loudly. Day mode is only
+safe while that holds.
+
 ### The slice standard
 
 Non-trivial work runs on Canopus, the build standard. It has seven numbered steps. Two

@@ -94,6 +94,30 @@ _CHILD_SPAWNS: list[tuple[str, str]] = []
 _CHILD_SPAWN_COUNT = 0
 _CHILD_SPAWN_CAP = 200
 
+# Per-test attribution: nodeid -> [count, one example command]. The flat example
+# list above is capped at 200 records, so under `-n auto` it fills with whatever
+# the FIRST 200 spawns were and says nothing about the other ten thousand.
+# MEASURED 2026-09-04: a full sharded run reported 10069 reachable children and
+# every one of the 16 printed examples was `<unknown test> -> .venv/bin/python -u
+# -c import sys;exec(...)`, the execnet bootstrap of the xdist workers -- because
+# the CONTROLLER is the only process whose examples the report ever saw, and the
+# controller spawns nothing but workers. 99.8% of the enforced number had no
+# nodeid, no command, and no way to act on it.
+#
+# A dict keyed by nodeid is bounded by the number of DISTINCT spawning tests
+# rather than by the spawn count, which is the shape that survives ten thousand
+# spawns from a few hundred tests. It is capped anyway, because nothing
+# guarantees that ratio.
+#
+# THE HONEST LIMIT: past the cap, a nodeid that has never been seen before is
+# counted in `_CHILD_SPAWN_COUNT` and dropped from this map, tallied in
+# `_CHILD_SPAWN_UNATTRIBUTED`. The map is therefore a lower bound per test and a
+# possibly-incomplete list of tests. The example command is the FIRST one seen
+# for that nodeid, not a summary of all of them.
+_CHILD_SPAWNS_BY_TEST: dict[str, list] = {}
+_CHILD_SPAWN_BY_TEST_CAP = 2000
+_CHILD_SPAWN_UNATTRIBUTED = 0
+
 # Wall-clock moment `_WATCH_BEFORE` was taken. Recorded because the overlay is a
 # LIVE tree: a concurrent agent, a daemon or the operator can create a file in it
 # while the suite runs, and a reader comparing the snapshot against a later walk
@@ -877,17 +901,28 @@ def _install_overlay_write_guard():
         return any(prefix.rstrip(os.sep) in pinned for prefix in _OVERLAY_PREFIXES)
 
     def _record_spawn(cmd, kwargs):
-        global _CHILD_SPAWN_COUNT
+        global _CHILD_SPAWN_COUNT, _CHILD_SPAWN_UNATTRIBUTED
         try:
             if not _child_reaches_live_overlay(kwargs):
                 return
             _CHILD_SPAWN_COUNT += 1
-            # The cap bounds the EXAMPLES kept, never the count above.
-            if len(_CHILD_SPAWNS) >= _CHILD_SPAWN_CAP:
-                return
             head = " ".join(str(a) for a in cmd)[:120] if isinstance(cmd, (list, tuple)) \
                 else str(cmd)[:120]
             nodeid = os.environ.get("PYTEST_CURRENT_TEST", "<unknown test>").split(" (")[0]
+            # Attribution BEFORE the example cap, and that ordering is the fix.
+            # `_CHILD_SPAWNS` fills at 200 and then records nothing, so under
+            # `-n auto` the report described the first 200 spawns of the
+            # controller and none of the workers' ten thousand.
+            entry = _CHILD_SPAWNS_BY_TEST.get(nodeid)
+            if entry is not None:
+                entry[0] += 1
+            elif len(_CHILD_SPAWNS_BY_TEST) < _CHILD_SPAWN_BY_TEST_CAP:
+                _CHILD_SPAWNS_BY_TEST[nodeid] = [1, head]
+            else:
+                _CHILD_SPAWN_UNATTRIBUTED += 1
+            # The cap bounds the EXAMPLES kept, never the count above.
+            if len(_CHILD_SPAWNS) >= _CHILD_SPAWN_CAP:
+                return
             _CHILD_SPAWNS.append((nodeid, head))
         except Exception:  # noqa: BLE001 - a diagnostic must never break a run
             return
@@ -1114,6 +1149,55 @@ def _carry_spawn_count(extra: int) -> None:
     _CHILD_SPAWN_COUNT += extra
 
 
+def top_spawners(limit=10, source=None):
+    """`(nodeid, example command, count)` for the busiest spawners, most first.
+
+    `source` defaults to this process's own map. The controller of a sharded
+    run passes the aggregate it built from the workers' reports, because its
+    own map holds nothing but the execnet bootstrap of the workers themselves.
+
+    Ties break on nodeid so the same run twice prints the same order; without
+    it a reader diffing two reports sees churn that means nothing.
+    """
+    if source is None:
+        source = _CHILD_SPAWNS_BY_TEST
+    ranked = sorted(source.items(), key=lambda kv: (-kv[1][0], kv[0]))
+    return [(nodeid, entry[1], entry[0]) for nodeid, entry in ranked[:limit]]
+
+
+def merge_spawn_attribution(entries, unattributed=0, into=None):
+    """Fold `(nodeid, example command, count)` triples into an attribution map.
+
+    Used twice, and both callers matter. `arm()` folds a displaced module
+    copy's map into this one, the same handover `_carry_spawn_count` performs
+    for the bare total. `tests/conftest.py` folds each xdist worker's report
+    into the controller's aggregate.
+
+    THE LIMIT, which is the whole reason this takes counts rather than events:
+    what arrives from a worker is already the worker's TOP slice, not its whole
+    map, so the aggregate is a lower bound per test and cannot see a test that
+    spawned a few children on every one of eight workers. It is built to name
+    the heavy spawners, which is what a repair needs, and it will not name the
+    long tail. `_CHILD_SPAWN_COUNT` remains the only complete number.
+    """
+    global _CHILD_SPAWN_UNATTRIBUTED
+    target = _CHILD_SPAWNS_BY_TEST if into is None else into
+    for nodeid, cmd, count in entries:
+        entry = target.get(nodeid)
+        if entry is not None:
+            entry[0] += count
+        elif len(target) < _CHILD_SPAWN_BY_TEST_CAP:
+            target[nodeid] = [count, cmd]
+        else:
+            # Over the cap, whichever map this is. Counted, never silent: an
+            # attribution list that quietly drops rows is the report claiming
+            # coverage it does not have, which is the defect this whole file
+            # is a repair for.
+            _CHILD_SPAWN_UNATTRIBUTED += count
+    _CHILD_SPAWN_UNATTRIBUTED += unattributed
+    return target
+
+
 def arm(mode=None, snapshot=None, structural_only=False):
     """Install the wrappers, and optionally take the before-snapshot.
 
@@ -1241,6 +1325,10 @@ def arm(mode=None, snapshot=None, structural_only=False):
         # Spawns recorded before the handover are still suspects, so carry them.
         _CHILD_SPAWNS.extend(owner.get("_CHILD_SPAWNS") or ())
         _carry_spawn_count(owner.get("_CHILD_SPAWN_COUNT") or 0)
+        merge_spawn_attribution(
+            [(nodeid, entry[1], entry[0]) for nodeid, entry
+             in (owner.get("_CHILD_SPAWNS_BY_TEST") or {}).items()],
+            unattributed=owner.get("_CHILD_SPAWN_UNATTRIBUTED") or 0)
     # Install ONCE per process. A second `arm()` refreshes the mode, the prefixes
     # and the snapshot, and deliberately does NOT wrap again. Two layers of
     # wrappers is not a cosmetic problem: `restore()` unwinds exactly one, so the

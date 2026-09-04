@@ -24,6 +24,12 @@ import scripts.canopus as canopus
 from scripts.canopus import main
 from scripts.utils.canopus_note import digest_text, write_note
 
+# Every child this file spawns is `git` in a scratch tree, and `git` has never
+# read HEADING_OS_DATA. Pinning it away from the operator's live overlay costs
+# these tests nothing and removes them from the reachability ratchet in
+# tests/conftest.py. See the `scratch_data_root` fixture for the measurement.
+pytestmark = pytest.mark.usefixtures("scratch_data_root")
+
 
 def _make_tree(root: Path) -> Path:
     """A synthetic working tree to run a scratch contract inside."""

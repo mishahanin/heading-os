@@ -20,6 +20,12 @@ import pytest
 
 from scripts.utils.canopus_note import digest_text, write_note
 
+# Every child this file spawns is `git` in a scratch tree, and `git` has never
+# read HEADING_OS_DATA. Pinning it away from the operator's live overlay costs
+# these tests nothing and removes them from the reachability ratchet in
+# tests/conftest.py. See the `scratch_data_root` fixture for the measurement.
+pytestmark = pytest.mark.usefixtures("scratch_data_root")
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location(
     "canopus_check", ROOT / "scripts" / "canopus_check.py"

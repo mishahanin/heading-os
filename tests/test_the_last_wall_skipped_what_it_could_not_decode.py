@@ -43,6 +43,12 @@ sys.path.insert(0, str(ROOT))
 
 from scripts.utils.engine_guard import BINARY_SUFFIXES, engine_text_files  # noqa: E402
 
+# Every child this file spawns is `git` in a scratch tree, and `git` has never
+# read HEADING_OS_DATA. Pinning it away from the operator's live overlay costs
+# these tests nothing and removes them from the reachability ratchet in
+# tests/conftest.py. See the `scratch_data_root` fixture for the measurement.
+pytestmark = pytest.mark.usefixtures("scratch_data_root")
+
 # push-all.py calls ensure_venv() at MODULE scope; tests/conftest.py sets the
 # guard that stops it re-execing the pytest process. Same idiom as
 # tests/test_push_all_gate.py.

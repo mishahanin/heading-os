@@ -35,6 +35,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.air_gap import is_denied
 from scripts.utils.commit_source import _changed_paths, iter_commits
 
+# Every child this file spawns is `git` in a scratch tree, and `git` has never
+# read HEADING_OS_DATA. Pinning it away from the operator's live overlay costs
+# these tests nothing and removes them from the reachability ratchet in
+# tests/conftest.py. See the `scratch_data_root` fixture for the measurement.
+pytestmark = pytest.mark.usefixtures("scratch_data_root")
+
 US = "\x1f"  # ASCII unit separator, the field delimiter
 RS = "\x1e"  # ASCII record separator
 

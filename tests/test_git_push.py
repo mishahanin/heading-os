@@ -19,6 +19,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import scripts.utils.git_push as git_push
 from scripts.utils.git_push import ahead_behind, current_branch, supervised_push
 
+# Every child this file spawns is `git` in a scratch tree, and `git` has never
+# read HEADING_OS_DATA. Pinning it away from the operator's live overlay costs
+# these tests nothing and removes them from the reachability ratchet in
+# tests/conftest.py. See the `scratch_data_root` fixture for the measurement.
+pytestmark = pytest.mark.usefixtures("scratch_data_root")
+
 
 def _git(args, cwd):
     return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,

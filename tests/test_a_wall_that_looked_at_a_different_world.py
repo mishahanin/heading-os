@@ -46,6 +46,12 @@ import pytest
 
 from scripts.utils import git_push
 
+# Every child this file spawns is `git` in a scratch tree, and `git` has never
+# read HEADING_OS_DATA. Pinning it away from the operator's live overlay costs
+# these tests nothing and removes them from the reachability ratchet in
+# tests/conftest.py. See the `scratch_data_root` fixture for the measurement.
+pytestmark = pytest.mark.usefixtures("scratch_data_root")
+
 ROOT = Path(__file__).resolve().parent.parent
 
 AMBIENT_MARKER = "SHARD59_AMBIENT_MARKER"

@@ -1,7 +1,12 @@
 {
-  "reachable_children": 9659,
-  "measured": "2026-09-03",
+  "reachable_children": 6100,
+  "measured": "2026-09-04",
   "shape": "pytest -n auto -m \"not acceptance\", the shape the suite is actually run in",
-  "also_measured": {"single_process": 9460},
-  "note": "Shrink-only. The count varies with run shape: 9460 in one process (37 min), 9659 across xdist workers (8 min). NOT ESTABLISHED: the run-to-run variance within one shape, which needs a second sharded measurement. If this gate starts flapping, that is the reason and the fix is to measure it, not to raise the number."
+  "also_measured": {
+    "yard_after_the_pin": [4716, 4857, 4855, 4920],
+    "yard_before_the_pin": [9119, 9173, 8904],
+    "helm_before_the_pin": 10069,
+    "single_process_2026_09_03": 9460
+  },
+  "note": "Shrink-only. RUN-TO-RUN VARIANCE IS NOW ESTABLISHED, which the previous note recorded as the open question: two same-shape runs of one tree gave 9119 and 9173, a spread of 54 (0.6%), so the observed HELM growth 9659 -> 9815 -> 9861 -> 10069 is real growth and not noise. THE COUNT IS CLONE-DEPENDENT: 50 tests skip in a worktree (MAIN_CLONE_SKIP, 'no data overlay on this clone'), so this YARD measures about 900 below HELM on the same commit. 6100 is DERIVED, not measured in one place: 4920 (highest of four post-pin YARD runs) + 896 (the HELM-minus-YARD gap measured before the pin) + 284 headroom. The gap component is carried over from a pre-pin measurement and is the weakest term. RE-MEASURE IN HELM after this branch merges and ratchet down to what it reports; do not leave 6100 standing as if it had been measured there. If this gate flaps, that is still the reason and the fix is still to measure it, not to raise the number: the report now names the top spawning tests with their commands, so there is something to act on."
 }

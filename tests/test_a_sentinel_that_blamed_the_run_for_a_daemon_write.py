@@ -139,7 +139,10 @@ def test_the_baseline_is_a_committed_measured_number():
     data = json.loads(BASELINE_FILE.read_text(encoding="utf-8"))
     assert isinstance(data["reachable_children"], int)
     assert data["reachable_children"] >= 0
-    assert data["measured"] == "2026-09-03"
+    # Re-frozen 2026-09-04, DOWNWARD, from 9659 to 6100. A date pinned to a
+    # literal is what forces whoever moves the number to come here and say so,
+    # which is the point; it is not a claim that the number cannot change.
+    assert data["measured"] == "2026-09-04"
 
 
 def test_a_missing_or_corrupt_baseline_fails_strict(tmp_path, monkeypatch):

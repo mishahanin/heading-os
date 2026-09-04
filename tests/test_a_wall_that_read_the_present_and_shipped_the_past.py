@@ -59,6 +59,12 @@ from scripts.utils.push_history import (  # noqa: E402
     unpushed_paths,
 )
 
+# Every child this file spawns is `git` in a scratch tree, and `git` has never
+# read HEADING_OS_DATA. Pinning it away from the operator's live overlay costs
+# these tests nothing and removes them from the reachability ratchet in
+# tests/conftest.py. See the `scratch_data_root` fixture for the measurement.
+pytestmark = pytest.mark.usefixtures("scratch_data_root")
+
 # push-all.py calls ensure_venv() at MODULE scope; tests/conftest.py sets the
 # guard that stops it re-execing pytest. Same note as tests/test_push_all_gate.py.
 _spec = importlib.util.spec_from_file_location(

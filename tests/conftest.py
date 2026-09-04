@@ -723,6 +723,78 @@ def _pin_the_data_root_even_on_package_re_entry(request, tmp_path, monkeypatch):
     monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path))
 
 
+@pytest.fixture(scope="session")
+def _scratch_data_root_parent(tmp_path_factory):
+    """One numbered directory for the whole session, not one per test.
+
+    `tmp_path_factory.mktemp` calls `make_numbered_dir`, which LISTS its base
+    directory to find the next free number, so once per test it is O(n^2) in
+    the number of tests that ask for it. A session-scoped parent plus an
+    `mkdir` named from the nodeid is O(1) per test.
+
+    The O(n^2) is a reading of the code, not of a stopwatch, and this docstring
+    deliberately carries NO wall-clock number. An earlier draft did, and it was
+    wrong twice over: it read 807 s against a 458 s baseline as this fixture's
+    doing, and both figures were taken while two other pytest runs shared the
+    same 16 cores at load 20.6. Under that contention a suite time says nothing
+    about the suite. Whether the child-count reduction moves wall clock at all
+    is UNMEASURED; establishing it needs before and after in the same shape,
+    back to back, on an idle machine.
+    """
+    return tmp_path_factory.mktemp("scratch-data-roots")
+
+
+@pytest.fixture
+def scratch_data_root(_scratch_data_root_parent, request, monkeypatch):
+    """Point `HEADING_OS_DATA` at an empty scratch tree for this test.
+
+    Same pin as `_pin_the_data_root_even_on_package_re_entry` above, offered to
+    a FILE rather than a package. A file opts in with one line beside its
+    imports, so the reason sits next to the tests it governs rather than in a
+    list here that nobody reading the file would see:
+
+        pytestmark = pytest.mark.usefixtures("scratch_data_root")
+
+    WHAT IT IS FOR. A child process inherits `os.environ`, and on the operator's
+    machine `HEADING_OS_DATA` names the live overlay, so every subprocess a test
+    spawns is a child that could resolve the operator's real data. The
+    reachability ratchet in `pytest_sessionfinish` counts exactly those.
+    MEASURED 2026-09-04 over a full `-n auto` run: 9173 such children, 6420 of
+    them raw `git` (`git init` into a `tmp_path`, `git clone`, `git
+    check-ignore`), spread over 1460 distinct tests. `git` has never read this
+    variable, so pinning it away from the overlay cannot change what those
+    children do; it removes a reachability the test never wanted. Sixteen files
+    took it on that basis and the run went 9173 -> 4855.
+
+    IT IS NOT A SPEED-UP, and must not be described as one. Same tree, same
+    shape, the pin the only difference: 8904 children in 820 s against 4855 in
+    803 s.
+
+    A DIRECTORY OF ITS OWN, not the test's `tmp_path`, and that is deliberate.
+    Several of the opted-in files build a scratch git repo directly in
+    `tmp_path` and then assert over its contents; a data root pointed at the
+    same directory would have the code under test create `.sync/`, `outputs/`
+    and friends inside the tree those assertions walk. It is named from a
+    digest of the nodeid rather than by `mktemp` for the cost reason recorded
+    on `_scratch_data_root_parent` above, and a digest rather than `hash()`
+    because the builtin is salted per process and two workers would then
+    disagree about which name belongs to which test.
+
+    THE LIMIT: this is opt-in and the opting is a judgement. A file whose
+    SUBJECT is the data overlay -- the HELM write guard, the leak matrix, the
+    datastore readers -- must NOT take it, because for those the live root is
+    the thing under test. Nothing mechanical enforces that; what does is that
+    such a file's tests go red when the pin is wrong, which is why every file
+    added here was added by running it.
+    """
+    import hashlib
+    name = hashlib.sha256(
+        str(request.node.nodeid).encode("utf-8", "replace")).hexdigest()[:16]
+    root = _scratch_data_root_parent / name
+    root.mkdir(exist_ok=True)
+    monkeypatch.setenv("HEADING_OS_DATA", str(root))
+
+
 @pytest.fixture(autouse=True)
 def _pin_model_resolution(request):
     """No unit test resolves a model id over the network.
@@ -1296,6 +1368,19 @@ os.environ["WS_OVERLAY_WATCH_OWNER"] = "1"
 # shape that silently made a module name local and broke `arm()` earlier today.
 _WORKER_REACHABLE_TOTAL = [0]
 
+# Attribution folded up from the workers: nodeid -> [count, example command].
+# The controller's OWN map is useless for this: it spawns nothing but the
+# execnet bootstrap of the workers, so before this existed the report's sixteen
+# examples were sixteen copies of that bootstrap under `<unknown test>` while
+# the ten thousand spawns it enforced against arrived as a bare integer.
+_WORKER_SPAWN_ATTRIBUTION: dict[str, list] = {}
+
+# How many attribution rows each worker sends back. `workeroutput` is pickled
+# through execnet, so this is a wire budget, not a display one: 100 rows of a
+# nodeid plus a 120-char command is ~20 KB per worker. The display limit is
+# separate and smaller, applied to the aggregate.
+_WORKER_ATTRIBUTION_ROWS = 100
+
 
 @pytest.hookimpl(optionalhook=True)
 def pytest_testnodedown(node, error):
@@ -1315,6 +1400,12 @@ def pytest_testnodedown(node, error):
     """
     output = getattr(node, "workeroutput", None) or {}
     _WORKER_REACHABLE_TOTAL[0] += int(output.get("overlay_reachable", 0) or 0)
+    # The count alone told an operator that the gate had tripped and nothing
+    # about what to do next. The rows do.
+    _guard.merge_spawn_attribution(
+        output.get("overlay_reachable_by_test") or (),
+        unattributed=int(output.get("overlay_reachable_unattributed", 0) or 0),
+        into=_WORKER_SPAWN_ATTRIBUTION)
 
 
 def pytest_sessionstart(session):
@@ -1433,6 +1524,15 @@ def pytest_sessionfinish(session, exitstatus):
         output = getattr(session.config, "workeroutput", None)
         if output is not None:
             output["overlay_reachable"] = reachable
+            # ATTRIBUTION, not just the total. Bounded on purpose: this is
+            # pickled back through execnet, so the whole map is not sent and
+            # the top slice is. Whatever the slice leaves behind is reported as
+            # a number in the same breath, so the controller never presents a
+            # partial list as the run.
+            rows = _guard.top_spawners(_WORKER_ATTRIBUTION_ROWS)
+            output["overlay_reachable_by_test"] = rows
+            output["overlay_reachable_unattributed"] = max(
+                0, reachable - sum(count for _, _, count in rows))
     else:
         reachable += _WORKER_REACHABLE_TOTAL[0]
 
@@ -1463,6 +1563,34 @@ def pytest_sessionfinish(session, exitstatus):
             else "nested pytest"))
         + ")",
     ]
+    # TOP OFFENDERS, and this is what makes the number actionable.
+    #
+    # Under `-n auto` the controller's own `_CHILD_SPAWNS` holds only the
+    # execnet bootstrap of the workers, so the aggregate folded up through
+    # `pytest_testnodedown` is the real answer and takes precedence. A
+    # single-process run has no workers and its own map IS the run.
+    #
+    # Both are folded, never one chosen. The controller's own spawns are real
+    # spawns and they are counted in `reachable`; leaving them out of the map
+    # made "4 of 6 attributed" read as a slice cap when the two missing were
+    # simply in the other dictionary. A copy, because this is a report and it
+    # must not mutate the aggregate it reports on.
+    attribution = {n: list(e) for n, e in _WORKER_SPAWN_ATTRIBUTION.items()}
+    _guard.merge_spawn_attribution(
+        [(n, e[1], e[0]) for n, e in _guard._CHILD_SPAWNS_BY_TEST.items()],
+        into=attribution)
+    offenders = _guard.top_spawners(10, source=attribution)
+    if offenders:
+        named = sum(count for _, _, count in offenders)
+        established.append(
+            "top spawners: "
+            + "; ".join(f"{count}x {nodeid} -> {cmd}"
+                        for nodeid, cmd, count in offenders)
+            + f" ({named} of {reachable} attributed to the {len(offenders)} "
+              f"shown; {len(attribution)} distinct test(s) reported, "
+              f"{_guard._CHILD_SPAWN_UNATTRIBUTED} spawn(s) past the "
+              f"per-worker slice or the map cap and so unattributed)"
+        )
     spawns = _guard._CHILD_SPAWNS
     if spawns:
         shown = spawns[:10]
@@ -1491,10 +1619,13 @@ def pytest_sessionfinish(session, exitstatus):
                             red=over, yellow=not over)
         reporter.write_line(not_established, yellow=True)
         if over:
+            first = (f" Start with {offenders[0][0]} ({offenders[0][2]} spawn(s))."
+                     if offenders else
+                     " No test could be named: no worker reported attribution.")
             reporter.write_line(
                 f"More children reached the live data root than the frozen "
-                f"{baseline}. Pass HEADING_OS_DATA pointing at a tmp_path to "
-                f"whatever this run added.", red=True)
+                f"{baseline}. Pass HEADING_OS_DATA pointing at a tmp_path in "
+                f"the spawning test's subprocess env." + first, red=True)
     if over:
         session.exitstatus = 1
 

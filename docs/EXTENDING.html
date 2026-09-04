@@ -281,6 +281,47 @@ uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </sp
   filename does not document that file. It also prints which prose sources it read.
   On a clone with no private overlay, a file documented only there reads as
   undocumented.</p>
+<h3 id="day-mode-run-only-the-tests-a-change-can-reach">Day mode: run only the tests a change can reach</h3>
+<p>The full suite is large, and every worker pays its collection cost. During the
+working day, run a selection instead:</p>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/day-mode.py<span class="w"> </span><span class="k">select</span><span class="w">    </span><span class="c1"># what would run, and by which route</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/day-mode.py<span class="w"> </span>run<span class="w">       </span><span class="c1"># run the selection</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/day-mode.py<span class="w"> </span>blind<span class="w">     </span><span class="c1"># files no route can select</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/day-mode.py<span class="w"> </span>nightly<span class="w">   </span><span class="c1"># the night side of the contract</span>
+</code></pre></div>
+<p>Day mode is never the default. The pre-push gate and CI still run the whole
+suite. The operator decides, per run, whether to use day mode.</p>
+<p>Read the module docstring in <code>scripts/utils/day_mode.py</code> before you trust a
+selection. It states, in full, what day mode can miss.</p>
+<p>A test file arrives by one of six routes. It is itself a changed test. A changed
+<code>conftest.py</code> selects its subtree. A module a conftest imports, or a data file a
+conftest names, selects that subtree too. An import edge reaches it. A string
+constant inside it names the changed file. Or it sits in the mandatory core.</p>
+<p>The conftest routes matter more than they look. Pytest loads a conftest for
+every test beneath it, and never through an import statement, so no edge runs
+from a test file to it. A change to anything <code>tests/conftest.py</code> reaches
+therefore selects the whole suite. Measured 2026-09-04: a change to
+<code>scripts/utils/workspace.py</code> selects 1079 of 1079 files. That is the correct
+answer, not a limitation. Such a change can break any test. Day mode prints the
+share so you can see it saved nothing, and run the full suite instead.</p>
+<p>The literal route carries the most weight here. Many tests drive a script as a
+subprocess, so no import edge to it exists. <code>codegraph affected</code> reports zero
+tests for <code>.claude/hooks/_dispatch.py</code> for that reason, and fifteen of the
+sixteen files under <code>.claude/hooks/</code> behave the same way. The literal route
+selects 39 tests for that file.</p>
+<p>Note the trap if you reach for <code>codegraph affected</code> yourself. Its filter
+partitions the corpus, and no single value returns the whole answer. Measured
+2026-09-04 against <code>scripts/utils/supervise.py</code>: <code>--filter "tests/**/*.py"</code>
+returns 122 files, all in subdirectories. <code>--filter "tests/**"</code> returns 14, all
+directly in <code>tests/</code>. No filter at all returns zero.</p>
+<p>The two sets do not overlap. Make both calls and union them yourself. Repeating
+the flag does not union: <code>--filter A --filter B</code> returns only B. A comma list
+and a brace list each return zero, silently.</p>
+<p>Day mode derives the mandatory core; nobody writes it by hand. The core is every
+test that reads the repository tree. Any change alters what those tests see, and
+no edge names them. Measured 2026-09-04: 155 of 1079 test files.</p>
+<p>The night must run the full suite, and it must fail loudly. Day mode is only
+safe while that holds.</p>
 <h3 id="the-slice-standard">The slice standard</h3>
 <p>Non-trivial work runs on Canopus, the build standard. It has seven numbered steps. Two
 of them are the operator&rsquo;s own approval moments, and three instruments measure whether

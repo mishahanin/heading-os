@@ -116,6 +116,12 @@ outputs/browser/firecrawl-cache/
 # Claude model list (rebuildable 24h cache of the Models API)
 .cache/claude-models.json
 
+# Day-mode fact cache and the known-green marker (scripts/day-mode.py). Both are
+# derived from the checkout and are per-clone by definition: the marker records
+# which revision THIS machine's nightly last passed on, so a committed one would
+# tell every other clone a full run had succeeded there when none had.
+.cache/day-mode/
+
 # Auto-generated sync state (calendar, email, linkedin) - moved out of datastore in restructure
 outputs/_sync/
 

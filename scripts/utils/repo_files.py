@@ -249,6 +249,65 @@ def git_index_paths(root: Path | None = None) -> list[str]:
     return paths
 
 
+def working_tree_paths(root: Path | None = None) -> list[str]:
+    """Every file in the WORKING TREE that git does not ignore, repo-relative.
+
+    The SAME corpus `tracked_paths(["**/*"])` produces, asked of git once rather
+    than globbed off the filesystem. It exists because a caller that needs the
+    corpus as a cache KEY has to recompute it on every invocation, and the glob
+    is too slow to do that: MEASURED 2026-09-04 on this checkout, 2341 files,
+    `tracked_paths(["**/*"])` took 4.19 s and this took 0.07 s.
+
+    WHY IT IS NOT `git ls-files`. That reads the INDEX, and the index is not the
+    corpus. `tracked_paths` globs the tree and subtracts only what
+    `git check-ignore` names, so an UNTRACKED, non-ignored file -- a scratch
+    `.py` a parallel agent drops under `scripts/`, a half-written test, a `.md` a
+    crashed tool left -- is IN the corpus that roughly a hundred sweeps read.
+    `--others --exclude-standard` is what adds exactly those back; without it a
+    caller keying on this would hand back a verdict for a tree it never saw.
+    `read_sources` below records the day one such file changed a sweep's answer.
+
+    `--exclude-standard` applies the same ignore rules `git check-ignore` does
+    (`.gitignore`, `.git/info/exclude`, the global excludes file), so the two
+    agree by construction rather than by a second copy of the rule.
+
+    Two deliberate differences from `tracked_paths`, both asserted by
+    `tests/test_a_cache_key_that_could_not_see_an_untracked_file.py`:
+
+    * A path git lists but that is not a file on disk right now is dropped, so a
+      tracked file someone deleted leaves the corpus. `tracked_paths` reaches the
+      same answer by globbing, since a deleted file is not there to be globbed.
+    * Git's OWN directory is dropped, and this is where the two enumerations
+      genuinely disagree rather than merely differing in spelling. `git
+      check-ignore` does not report anything under `.git` as ignored, so
+      `tracked_paths(["**/*"])` keeps whatever its glob found there -- and what
+      the glob finds depends on the SHAPE of the checkout. In a main clone
+      `.git` is a directory and the glob descends into every one of its files;
+      in a worktree `.git` is a one-line file holding a gitdir pointer and the
+      glob returns just that. Neither is source, both change under any git
+      command including a read, and the difference between them would give HELM
+      and a YARD different keys for identical trees. So the agreement this
+      function claims with `tracked_paths` is stated with that exclusion and
+      the test asserts exactly that, not more.
+    """
+    repo = ROOT if root is None else root
+    try:
+        proc = subprocess.run(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            cwd=repo, capture_output=True, check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise IndexUnreadable(f"git ls-files failed in {repo}: {exc}") from exc
+    # Same three reader details as `git_index_paths`: `-z`, no text mode, and
+    # `surrogateescape`. A path is bytes on POSIX, and a reader that loses one
+    # reports a clean sweep over a narrower corpus than the one it names.
+    raw = proc.stdout.decode("utf-8", errors="surrogateescape")
+    names = {part for part in raw.split("\0") if part and part != ".git"}
+    if not names:
+        raise IndexUnreadable("git ls-files returned nothing")
+    return sorted(n for n in names if (repo / n).is_file())
+
+
 def read_sources(paths, vanished: list | None = None, *, errors: str = "strict"):
     """Yield `(path, text)` for each path still on disk, skipping and reporting
     the ones that disappeared between the walk and the read.

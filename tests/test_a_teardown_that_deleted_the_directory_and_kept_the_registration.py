@@ -51,6 +51,18 @@ Three facts about reading a registration, each measured rather than assumed:
 AND NEVER `git worktree prune`. Prune reaches every worktree of this repository,
 including ones other processes hold open right now.
 
+A FOURTH fact, learned the day after and by this file failing. `.git/worktrees`
+does not always exist: git creates it with the first linked worktree and deletes
+it with the last, so a repository with none has no such directory, and that is
+its normal state rather than a broken one. Two tests here read it with a bare
+`.iterdir()`, which was green only because the author's own YARD was registered
+in it. MEASURED 2026-09-04: with the last YARD deleted, `2 failed, 7 passed`,
+both `FileNotFoundError: <helm>/.git/worktrees`. The verdict was being decided by
+the state of the machine instead of by the code -- in a file about worktree
+registrations. `_registered_names` answers for both states, and
+`test_the_two_states_of_the_shared_directory_are_both_read` builds both in a
+clone of its own so neither depends on what the operator's worktrees do today.
+
 Run: python3 -m pytest tests/test_a_teardown_that_deleted_the_directory_and_kept_the_registration.py
 """
 from __future__ import annotations
@@ -74,11 +86,36 @@ from tests.conftest import (  # noqa: E402
 CONFTEST = ROOT / "tests" / "conftest.py"
 
 
-def _shared_worktrees() -> Path:
+def _shared_worktrees(checkout: Path = ROOT) -> Path:
     common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
-                            cwd=str(ROOT), capture_output=True, text=True,
+                            cwd=str(checkout), capture_output=True, text=True,
                             check=True).stdout.strip()
-    return (Path(ROOT) / common).resolve() / "worktrees"
+    return (Path(checkout) / common).resolve() / "worktrees"
+
+
+def _registered_names(shared: Path) -> frozenset[str] | None:
+    """The entries under `shared`, or None when the directory does not exist.
+
+    ABSENT IS A LAWFUL STATE, not a broken environment. git creates
+    `.git/worktrees` with the first linked worktree and REMOVES it with the
+    last, so a repository that has never had one -- or has just lost the only
+    one it had -- does not have the directory at all. MEASURED 2026-09-04: with
+    the last YARD deleted, the two tests below raised
+
+        FileNotFoundError: .../.heading-os/.git/worktrees
+
+    from a bare `.iterdir()`, so their verdict was decided by whether a worktree
+    happened to exist on the machine rather than by the code they test. That is
+    the same defect this whole file is about, one level up.
+
+    None rather than an empty set, deliberately: "no directory" and "an empty
+    directory" are different states, and a caller asserting that an action
+    changed nothing must be able to catch an action that CREATED the directory.
+    """
+    try:
+        return frozenset(path.name for path in shared.iterdir())
+    except FileNotFoundError:
+        return None
 
 
 # ============================================================
@@ -119,10 +156,16 @@ def test_the_fixture_registers_nowhere_near_the_operators_live_worktrees(
 def test_using_the_fixture_leaves_the_shared_directory_untouched(
         temporary_worktree):
     """Behaviour, not source inspection. The count is read while a worktree of
-    the fixture is alive, which is the only moment an entry could appear."""
-    entries = sorted(p.name for p in _shared_worktrees().iterdir())
+    the fixture is alive, which is the only moment an entry could appear.
+
+    Read through `_registered_names`, so an absent shared directory is one of
+    the two states this asserts over rather than a crash: if this repository has
+    no linked worktree, the fixture must not have CREATED the directory either,
+    and `None == None` says exactly that.
+    """
+    entries = _registered_names(_shared_worktrees())
     assert temporary_worktree.is_dir()
-    assert sorted(p.name for p in _shared_worktrees().iterdir()) == entries
+    assert _registered_names(_shared_worktrees()) == entries
 
 
 def test_a_main_clone_reports_none_because_it_has_no_registration(
@@ -199,10 +242,62 @@ def test_deleting_the_directory_alone_leaves_the_registration(tmp_path):
 
 def test_dropping_nothing_is_a_no_op():
     """A teardown runs on the path where the fixture skipped, too."""
-    before = set(_shared_worktrees().iterdir())
+    before = _registered_names(_shared_worktrees())
     drop_worktree_registration(None)
     drop_worktree_registration(_shared_worktrees() / "does-not-exist")
-    assert set(_shared_worktrees().iterdir()) == before
+    assert _registered_names(_shared_worktrees()) == before
+
+
+def test_the_two_states_of_the_shared_directory_are_both_read(tmp_path):
+    """Both machine states, modelled, because the machine picks one for you.
+
+    The two tests above read THIS repository's shared directory, so on any given
+    day they exercise whichever state the operator's worktrees happen to leave
+    it in. This one builds both in a clone of its own and asserts the reader and
+    the teardown are total over them.
+
+    The failing half is the absent one: against the version of this file that
+    called `.iterdir()` directly, the first assertion below raises
+    FileNotFoundError. That is not hypothetical -- it is the 2026-09-04 push
+    failure that produced this test, and it appeared the moment the last YARD
+    was deleted, in a file about worktree registrations.
+    """
+    absent = tmp_path / "no-worktrees"
+    cloned = subprocess.run(
+        ["git", "clone", "--quiet", "--shared", str(ROOT), str(absent)],
+        capture_output=True, text=True)
+    if cloned.returncode != 0:
+        pytest.skip(f"could not clone: {cloned.stderr.strip()}")
+
+    shared = _shared_worktrees(absent)
+    assert not shared.exists(), (
+        "a fresh clone already had a worktrees directory, so the absent state "
+        "was never modelled and this test measures nothing")
+    assert _registered_names(shared) is None
+    drop_worktree_registration(shared / "never-existed")
+    assert not shared.exists(), "a no-op teardown created the directory"
+
+    # The other state, in the same clone: one linked worktree, so git creates
+    # the directory. Registered in the clone, never in this checkout.
+    linked = tmp_path / "linked"
+    created = subprocess.run(
+        ["git", "worktree", "add", "--detach", str(linked), "HEAD"],
+        cwd=str(absent), capture_output=True, text=True)
+    if created.returncode != 0:
+        pytest.skip(f"git worktree add failed: {created.stderr.strip()}")
+
+    registration = own_worktree_registration(linked)
+    try:
+        assert registration is not None
+        present = _registered_names(shared)
+        assert present is not None and registration.name in present
+        drop_worktree_registration(shared / "never-existed")
+        assert _registered_names(shared) == present, (
+            "a no-op teardown changed a directory that does exist")
+    finally:
+        subprocess.run(["git", "worktree", "remove", "--force", str(linked)],
+                       cwd=str(absent), capture_output=True, text=True)
+        drop_worktree_registration(registration)
 
 
 # ============================================================

@@ -1,0 +1,30 @@
+[Unit]
+Description=Nightly HEADING OS refresh (01:30, configured timezone)
+
+[Timer]
+# 01:30 in the configured timezone, and the slot is chosen rather than free. This
+# unit runs the WHOLE regression suite with pytest-xdist across every core, so it
+# is the only heavy job in this directory. The existing cluster sits at 02:50,
+# 03:00, 03:10, 03:20 and 03:30; starting at 01:30 leaves roughly eighty minutes
+# of clear air before the first of them, which is comfortably more than the
+# measured full-suite range. A number taken against a competing suite measures
+# contention, not code, and that is as true of the machine at night as it is of a
+# workstation at noon.
+#
+# The installer substitutes {{TZ}} from HEADING_OS_TZ (default UTC); the trailing
+# timezone pins the fire even when the host's local timezone differs
+# (systemd >= 252).
+OnCalendar=*-*-* 01:30:00 {{TZ}}
+# Persistent=true is mechanism 1 of the three reboot-survival mechanisms
+# (.claude/rules/development-standards.md): a fire missed because the machine was
+# off runs at next boot. Without it, a laptop that spent the night shut leaves the
+# green marker where it was and day mode keeps narrowing against a base nothing
+# re-verified. The other two mechanisms are `systemctl --user enable` (with the
+# WantedBy below) and `loginctl enable-linger`, both in the installer, and
+# `install-nightly-refresh-timer.sh --check` verifies all three separately.
+Persistent=true
+# RandomizedDelaySec is deliberately NOT set. A fixed start is what makes "did
+# last night run?" answerable from a journal timestamp.
+
+[Install]
+WantedBy=timers.target

@@ -856,6 +856,13 @@ _PROBE_PLAN = {
     "memory-auto-retire.py": (["--dry-run"], True),
     "memory-hygiene.py": ([], True),
     "memory-index.py": (["build"], False),
+    # Every timestamp it writes is `datetime.now(timezone.utc)` with the zone
+    # named explicitly, so it reaches no LOCAL zone and the answer is False
+    # rather than "reads it late". It still calls `load_env` first, because the
+    # `*_TELEGRAM_TARGET` names its alarm path resolves live in `.env` too.
+    # `--dry-run` because a probe must not run the full regression suite, and
+    # the probe blocks `subprocess.run` in any case.
+    "nightly-refresh.py": (["--dry-run"], False),
     # Its ONLY zone read sits after a `subprocess.run` that spawns a headless
     # call, and the probe refuses every outbound transport by design. So the
     # process cannot be driven to a read without lifting a safety control to test

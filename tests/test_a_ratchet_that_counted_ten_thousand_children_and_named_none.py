@@ -61,17 +61,34 @@ Halving the children does not halve the suite, and barely moves it. The
 reduction is worth having because it removes a real reachability and unblocks a
 gate; it is not a performance change and must not be sold as one.
 
-The suite's own runtime went 458 s -> 813 s across this work and is
-UNEXPLAINED. Two candidates are eliminated, named here so the next person does
-not spend two full runs re-deriving them. It is not the pin: the A/B above
-holds everything else fixed and the pin-off half is 820 s, not 458 s. It is not
-a competing session: the other pytest processes on the machine were traced by
-ancestry to this suite's OWN nested pytest children. That nesting is real --
-27 of 1083 test files spawn a pytest child directly, at 57 call sites, and ten
-scripts spawn one themselves, so a test that runs one of those nests with no
-`pytest` literal anywhere in it -- but its CONTRIBUTION to the step is NOT
-established, and a first count of "226 files" was a grep matching the word in
-docstring prose rather than in argv.
+THE SUITE'S OWN RUNTIME drifted 458 s -> 813 s -> 907 s across this work, and
+it is NOT this change. It is the pytest temp tree. MEASURED 2026-09-04, back to
+back on this commit, the ONLY difference being where pytest puts its scratch:
+
+    default basetemp          907 s
+    --basetemp=<fresh dir>    433 s
+
+`tmp_path_factory.getbasetemp()` calls `make_numbered_dir_with_cleanup(keep=3)`
+once per process, which scans the parent and tries to lock and rmtree the old
+session directories. Under `-n auto` that is sixteen workers plus the
+controller doing it against one parent at the same instant, and by this point
+that parent held 216 surviving session directories, 4.94 million files, 53 GB,
+three days deep. Best-effort locking means most of them give up, which is how
+216 survive a keep=3 policy, so the cost compounds. That is the shape of the
+drift: it grew between RUNS on an unchanged tree, not between versions.
+
+Recorded here rather than fixed here. Reclaiming that tree is the operator's
+call, and the durable defect is that this suite leaves millions of files behind
+per session, which no cleanup addresses.
+
+Two other candidates were eliminated before this one, named so nobody re-runs
+them. Not the pin: the A/B above holds everything else fixed and the pin-off
+half is 820 s, not 458 s. Not a competing session: the other pytest processes
+were traced by ancestry to this suite's OWN nested pytest children. That
+nesting is real (27 of 1083 test files spawn a pytest child directly, at 57
+call sites, plus ten scripts that spawn one themselves) but its contribution to
+the drift is not established, and a first count of "226 files" was a grep
+matching the word in docstring prose rather than in argv.
 
 Run: python3 -m pytest \\
      tests/test_a_ratchet_that_counted_ten_thousand_children_and_named_none.py

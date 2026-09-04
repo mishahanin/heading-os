@@ -116,6 +116,17 @@ outputs/browser/firecrawl-cache/
 # Claude model list (rebuildable 24h cache of the Models API)
 .cache/claude-models.json
 
+# Day-mode test verdict cache (scripts/test-cache.py). Machine-local and
+# rebuildable: it records which test files passed against which content hash of
+# this working tree, so it is meaningless in any other checkout. It must stay
+# untracked for a second reason as well - the cache key is a digest of the
+# working tree minus what is ignored here, so a TRACKED store would change the
+# key every time it was written and invalidate itself on every run.
+.cache/test-verdicts.db
+.cache/test-verdicts.db-journal
+.cache/test-verdicts.db-wal
+.cache/test-verdicts.db-shm
+
 # Auto-generated sync state (calendar, email, linkedin) - moved out of datastore in restructure
 outputs/_sync/
 

@@ -563,6 +563,7 @@ def _help_flags(cache: dict, script: str, subs: tuple[str, ...]) -> set[str] | N
     return cache[key]
 
 
+@pytest.mark.corpus
 def test_every_documented_flag_exists_in_the_script_that_is_invoked(main_clone_only):
     """A runbook step that exits 2 is worse than no step at all.
 
@@ -610,6 +611,7 @@ def test_every_documented_flag_exists_in_the_script_that_is_invoked(main_clone_o
         + "\n  ".join(undeclared))
 
 
+@pytest.mark.corpus
 def test_no_script_docstring_documents_a_flag_of_its_own_that_does_not_exist():
     """Narrower than the doc scan above, and deliberately so.
 

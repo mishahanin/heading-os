@@ -27,6 +27,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 
 from tests.repo_files import read_sources, tracked_paths  # noqa: E402
@@ -91,6 +93,7 @@ def _bare_interpreter_calls(tree: ast.AST):
     return hits
 
 
+@pytest.mark.corpus
 def test_no_bare_python_interpreter_in_spawned_commands():
     """No subprocess vector may start with a bare `python` / `python3`.
 

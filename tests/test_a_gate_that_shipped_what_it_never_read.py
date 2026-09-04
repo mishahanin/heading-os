@@ -195,6 +195,7 @@ def test_nothing_was_written_into_the_real_repository(sandbox):
         "surface; it needs a private overlay to have any real entity in it."
     ),
 )
+@pytest.mark.corpus
 def test_the_whole_engine_surface_passes():
     """The gate must be green on this repository, or the refusal is unusable.
 

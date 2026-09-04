@@ -101,6 +101,7 @@ def test_the_shared_skip_reason_exists_and_says_why():
         "the reason must name itself so a reader can find the one definition")
 
 
+@pytest.mark.corpus
 def test_no_test_writes_its_own_clone_skip():
     """A hand-written skip escapes the count below.
 
@@ -150,6 +151,7 @@ def test_the_gated_files_all_request_the_fixture():
     assert not missing, missing
 
 
+@pytest.mark.corpus
 def test_no_file_uses_the_fixture_without_appearing_in_the_map():
     """The direction that was missing, and its absence cost a real undercount.
 
@@ -194,6 +196,69 @@ def test_no_file_uses_the_fixture_without_appearing_in_the_map():
 # ============================================================
 # The count, pinned
 # ============================================================
+#
+# THIS TEST IS EXPENSIVE ON PURPOSE AND THREE CHEAPER SHAPES WERE MEASURED AND
+# REJECTED. All of 2026-09-04, in a YARD, on an idle box. Written down because
+# every one of them is the obvious idea and two of them look right until
+# measured.
+#
+# The starting complaint: under `-n auto` the suite's wall clock cannot fall
+# below its longest single test, and `--durations` in HELM at 514f5ae put this
+# one at 218.89 s, the largest number in the table.
+#
+# FIRST, THAT 218.89 s IS MOSTLY CONTENTION, NOT WORK. Standalone on an idle
+# box the same test is 41.55 s; in-suite under `-n auto` in this YARD it is
+# 98.91 s, where the longest test in the same run is 140.54 s. A `--durations`
+# entry measures a test competing with fifteen siblings for sixteen cores. It
+# is not a cost you can subtract by making the test smaller.
+#
+# REJECTED 1: `--setup-only`, which skips test bodies. Over the same nine files
+# the normal run reports 22 clone-gated skips and `--setup-only` reports 18.
+# Four are raised in a test BODY by `request.getfixturevalue("main_clone_only")`
+# under a parametrize value -- 3 in
+# `test_three_admin_tools_that_died_one_frame_below_the_seam.py` and 1 in
+# `test_timer_timezone.py` -- and a body is what `--setup-only` does not run.
+# As a single total, 18 against 22 reads as rounding; the per-file map names the
+# two files that went to zero, which is the argument for the map.
+#
+# REJECTED 2: running only the tests that request the fixture. The same four
+# refute it. `test_help_survives_a_missing_overlay` never names
+# `main_clone_only` in its signature, so neither an AST scan nor pytest's own
+# fixture closure can see that it skips.
+#
+# REJECTED 3, AND THIS ONE WAS BUILT, MEASURED AND REVERTED: parametrising the
+# test per file, nine cases the outer xdist can spread. It makes this test's
+# `--durations` entry smaller and the SUITE slower, which is the whole trap.
+# Measured twice on each side, idle box, nothing else running:
+#
+#     one test, one child over nine files    suite 528.72 s and 536.35 s
+#     nine cases, one child each             suite 822.89 s and 831.25 s
+#
+# The entry for this test fell from 98.91 s to 80.65 s while the suite gained
+# roughly 295 s. The mechanism is visible in the durations table: with sixteen
+# workers already holding sixteen cores, one SERIAL nested pytest becomes NINE
+# CONCURRENT ones, and every other child-spawning test pays for it --
+# `test_no_bootstrap_test_reaches_the_real_herdr` went 29.74 s to 81.99 s
+# without being touched. Splitting work that is already saturating the machine
+# does not spread it, it oversubscribes it.
+#
+# WHAT WOULD ACTUALLY WORK, and it is not a smaller child but no child at all.
+# The outer suite ALREADY runs these nine files and they already skip with the
+# reason; a check reading THIS run's own skip records costs zero and asserts on
+# the real run rather than on a child configured `-p no:xdist
+# -p no:cacheprovider`. VERIFIED 2026-09-04 in HELM by another session with a
+# throwaway plugin over three kinds of skip -- a `skipif` marker, a
+# fixture-raised one, and a body-raised `getfixturevalue` one: the xdist
+# CONTROLLER receives every worker's skip report, per-file attribution
+# survives, the reason arrives in `longrepr`, and it held at `-n 2`, at `-n 16`
+# and with xdist off. It was not built here because it is a change to a
+# conftest that 24700 tests import and this branch is about the floor.
+# Whoever builds it: a check that reads this run sees only the files IN this
+# run, so under `pytest tests/test_x.py` or a selective day mode it must REPORT
+# that it could not evaluate rather than pass over an empty corpus.
+#
+# So this test keeps its child. It is not cheap, and nothing cheaper measured
+# here preserves what it checks.
 
 def test_the_clone_gated_skips_are_what_was_measured():
     """The numbers, not the intention, and per file rather than in total.

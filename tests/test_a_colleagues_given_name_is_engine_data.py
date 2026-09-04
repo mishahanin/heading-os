@@ -143,6 +143,7 @@ def _run_gate(*extra: str) -> subprocess.CompletedProcess:
 @pytest.mark.skipif(
     not (ROOT.parent / ".heading-os-data" / "admin" / "executives.json").is_file(),
     reason="no DATA overlay on this machine; the gate no-ops and proves nothing")
+@pytest.mark.corpus
 def test_the_whole_engine_surface_passes_the_default_gate():
     """The end-to-end statement: with exec given names live, nothing in the
     engine tree names a colleague."""

@@ -250,6 +250,7 @@ filterwarnings = ["error::pytest.PytestReturnNotNoneWarning"]
 markers = [
     "integration: integration tests (mocked external services)",
     "slow: tests that take >5 seconds",
+    "corpus: the test's corpus is a REPOSITORY-WIDE walk -- tracked_paths / git_index_paths / tracked_python_files, an rglob rooted at a whole engine tree, or a child pytest that imports every module -- so its cost grows with the repository and has nothing to do with what a change touched. A sweep over ONE package is not this: tests/bridge/test_one_root_per_function.py rglobs 45 files of the bridge package and is deliberately unmarked despite costing 89.57 s, because the marker is about corpus SHAPE and not about runtime. MEASURED 2026-09-04 in HELM at 514f5ae: eight of the marked tests sit in the suite's ten slowest and account for 607.9 s of them. The marker DESELECTS NOTHING and no gate reads it yet; it exists so that deferring these is one operator decision rather than seventeen judgements taken under time pressure. `slow` is about wall clock and is orthogonal: a corpus sweep is usually also slow, and a test can be slow without reading the tree at all.",
     "flaky: observed failing without a reproduced cause. The marker deselects nothing and silences nothing; it records that a failure here is not yet evidence of a defect, and every marked test's docstring must state what was NOT established.",
     "acceptance: A+ sign-off gates; excluded from the per-push run (run explicitly in Phase 4)",
     "requires_exchange: needs exchangelib (uv sync --extra email)",

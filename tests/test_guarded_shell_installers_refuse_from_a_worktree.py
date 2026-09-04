@@ -50,6 +50,7 @@ GUARDED = (
     "install-memory-auto-retire-timer.sh",
     "install-memory-hygiene-timer.sh",
     "install-memory-index-timer.sh",
+    "install-nightly-refresh-timer.sh",
     "install-odin-cadence-timer.sh",
     "install-odin-propose-timer.sh",
     "install-ollama-guard-timer.sh",
@@ -97,8 +98,13 @@ def _first_line_of(path: Path, needle: str) -> int | None:
 # ============================================================
 
 def test_the_guarded_corpus_is_the_size_it_was_measured_at():
-    """MEASURED 2026-09-03: 19 guarded, 1 left to the operator."""
-    assert len(GUARDED) == 19
+    """MEASURED 2026-09-03: 19 guarded, 1 left to the operator.
+
+    20 since 2026-09-05, when `install-nightly-refresh-timer.sh` landed. It
+    renders a unit substituting the workspace path, so a run from a YARD would
+    point the nightly at a checkout that is deleted two days later.
+    """
+    assert len(GUARDED) == 20
     assert len(UNGUARDED_BY_DECISION) == 1
     for name in (*GUARDED, *UNGUARDED_BY_DECISION):
         assert (SCRIPTS / name).is_file(), f"{name} is not in scripts/ any more"

@@ -1,12 +1,12 @@
 # systemd unit templates
 
 systemd user-unit templates for this workspace, in two families: four
-long-running **daemons** (`.service` alone) and fourteen **scheduled tasks**
+long-running **daemons** (`.service` alone) and fifteen **scheduled tasks**
 (a `.service` plus its `.timer`). Installed and enabled on Linux (bare or WSL2).
 Mirrors the Windows `scripts/install-*-service.ps1` family and the macOS launchd
 path in `scripts/utils/schedule.py`.
 
-Last Updated: 2026-08-24
+Last Updated: 2026-09-05
 Consumed by: `scripts/install-daemon-service.sh`, `scripts/uninstall-daemon-service.sh`, `scripts/restart-daemon-service.sh` (daemons); one `scripts/install-<name>-timer.sh` per scheduled task
 
 ## Daemons
@@ -28,6 +28,32 @@ mechanisms every one of them needs to survive a reboot (`Persistent=true`,
 `systemctl --user enable`, `loginctl enable-linger`) are baked into the
 installers, so copy a sibling rather than hand-rolling a new one.
 
+**Installing is not arming, and only one installer can currently tell you which
+you got.** `install-nightly-refresh-timer.sh --check` verifies each of the three
+mechanisms SEPARATELY, reports installed-but-disabled as a state distinct from
+not-installed, and exits non-zero naming the one that is missing. The other
+fourteen installers print their state and leave the reading to you. Copy the
+`--check` block when you add the next one: an installer that was merged is not a
+timer that is armed, and a directory listing cannot tell the two apart.
+
+`nightly-refresh.service` is also the only one here that sets
+`TimeoutStartSec=`, and it is a bound that unit CHOOSES rather than one systemd
+imposes. `man systemd.service`, verbatim, because summarising it is what got it
+backwards once already:
+
+> Defaults to DefaultTimeoutStartSec= set in the manager, except when
+> Type=oneshot is used, in which case the timeout is disabled by default
+> (see systemd-system.conf(5)).
+
+Every unit in the table above is `Type=oneshot`, so none of them inherits a start
+timeout and none of them needs to be rescued from one. The nightly caps itself at
+5400s because an unbounded run that wedges holds a machine's worth of pytest
+workers indefinitely. MEASURED 2026-09-05 in HELM on `ca9457d`: a clean full run
+took 979s at one-minute load 26 with two YARDs competing, and 875s inside the
+push gate under similar load. Exceeding the cap terminates the run and reports
+`failed`, which on this job is the correct outcome: the green marker does not
+move.
+
 | Task | Templates | Schedule | Installer |
 |---|---|---|---|
 | Archive transcripts | `archive-transcripts.{service,timer}` | daily 02:50 | `install-archive-transcripts-timer.sh` |
@@ -38,6 +64,7 @@ installers, so copy a sibling rather than hand-rolling a new one.
 | Memory auto-retire | `memory-auto-retire.{service,timer}` | daily 07:20 | `install-memory-auto-retire-timer.sh` |
 | Memory hygiene | `memory-hygiene.{service,timer}` | Mon 07:34 | `install-memory-hygiene-timer.sh` |
 | Memory index refresh | `memory-index-refresh.{service,timer}` | daily 03:30 | `install-memory-index-timer.sh` |
+| Nightly refresh | `nightly-refresh.{service,timer}` | daily 01:30 | `install-nightly-refresh-timer.sh` |
 | Odin cadence nudge | `odin-cadence.{service,timer}` | Mon 09:00 | `install-odin-cadence-timer.sh` |
 | Odin skill proposals | `odin-propose.{service,timer}` | Mon 05:31 | `install-odin-propose-timer.sh` |
 | Ollama guard | `ollama-guard.{service,timer}` | every 5 min (2 min after boot) | `install-ollama-guard-timer.sh` |

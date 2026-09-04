@@ -3312,13 +3312,55 @@ def check_release_gate(payload: dict) -> dict | None:
 
 
 # ============================================================
-# YARD write guard — a worktree may not write into HELM, or run git in the data
+# YARD isolation guard — a worktree sees itself, HELM and the data overlay
 # ============================================================
 #
 # HELM is the main clone of the engine, on `main`, where everything live runs. A
 # YARD is a git worktree of the same repository on its own branch, checked out
 # outside the engine clone, where engine code is taken apart while HELM keeps
 # sailing on the merged version.
+#
+# THE MODEL, four lines, and nothing beyond them:
+#
+#   * this checkout          read and write, freely;
+#   * HELM                   READ must work — its `.git` holds the objects and
+#                            the refs, and without them git in a worktree is
+#                            dead. Writing into it: never;
+#   * the data overlay       writing FILES is fine, running git in it is not;
+#   * another YARD           nothing at all. Not a read, not a write, not a git
+#                            operation naming its path.
+#
+# The last line is why this wall was rewritten on 2026-09-04. It used to ask
+# "does this land inside HELM?", and everything that was not HELM was somebody
+# else's problem. MEASURED from a live YARD by calling this function directly:
+# writing into a NEIGHBOURING yard, `rm -rf` of one, `git branch -D` of another
+# task's branch and `git worktree prune` were all PERMITTED. The question a
+# worktree has to ask is "is this inside MY checkout?" — everything else belongs
+# to somebody, and two of the somebodies are not HELM.
+#
+# THE HONEST BOUNDARY, and it is narrower than it looks. This is a PreToolUse
+# hook. It sees TOOL CALLS the model makes and nothing else. It does not see
+# inside a process a tool call starts: an entire `pytest` run is ONE Bash call,
+# so every `open()`, every `shutil.rmtree` and every `subprocess` inside the
+# suite passes this wall once, as the string `pytest`, and is then unobserved.
+# The damage that prompted this change came from exactly there — a fixture's
+# `shutil.rmtree` removed the repository's worktree registrations, not a tool
+# call. So this closes the AGENT. It does not close tests, and it does not close
+# scripts. Do not read this wall as protection against code the agent runs.
+#
+# The only guard that runs INSIDE a process is
+# `scripts/utils/overlay_write_guard.py`, and it was NOT extended here. It
+# watches the data overlay's roots, so a neighbouring worktree is invisible to
+# it and so is HELM's `.git`. Extending it was considered and deliberately left
+# undone, because it is three changes rather than one: the sibling enumeration
+# would have to move to `scripts/utils/clone_guard.py` to avoid a second copy;
+# the new roots must be refusal-only and NOT snapshot roots, since `arm()` feeds
+# one set to both and walking HELM at every interpreter start is not affordable;
+# and to cover the incident that prompted this it would have to protect
+# `<HELM>/.git/worktrees`, which the suite's own fixtures legitimately write
+# when they clean up their entry. That last one cannot be settled without
+# measuring the suite against it. It is a task with its own evidence, not a
+# rider on this one.
 #
 # This check lives HERE, inside the dispatcher, and not in a hook file of its
 # own. That is the load-bearing decision of the whole design, because six things
@@ -3374,16 +3416,53 @@ _YARD_READ_ONLY_VERBS = frozenset((
 
 # Read-only git verbs. Anything else spelled `git` and aimed at HELM or at the
 # data overlay is refused.
+#
+# `branch` and `worktree` were on this list until 2026-09-04 and that is where
+# two of the four measured holes were: `git branch -D <another task's branch>`
+# and `git worktree prune` both classified as reads and sailed through. Neither
+# verb is read-only or write-only — each has a listing form and a mutating one —
+# so they are classified by `_yard_git_subcommand_is_listing` below instead of
+# by membership here.
 _YARD_READ_ONLY_GIT = frozenset((
-    "log", "show", "diff", "status", "branch", "remote", "rev-parse",
-    "describe", "blame", "shortlog", "ls-files", "cat-file", "worktree",
+    "log", "show", "diff", "status", "remote", "rev-parse",
+    "describe", "blame", "shortlog", "ls-files", "cat-file",
 ))
+
+# Every git verb this guard recognises, so `git -C <path> branch` finds `branch`
+# rather than mistaking `<path>` for the subcommand.
+_YARD_GIT_VERBS = _YARD_READ_ONLY_GIT | {"branch", "worktree"}
+
+# `git branch`, listing forms only. An ALLOW-list rather than a list of mutating
+# flags, and deliberately: an enumeration of the dangerous verbs is a list of
+# holes, and this repository has already paid for one (the daemon prohibition
+# that named install/restart/uninstall and let `start` through). A flag git adds
+# next year is unrecognised here and therefore REFUSED, which is the direction
+# that survives being out of date.
+_YARD_BRANCH_LISTING_FLAGS = frozenset((
+    "-a", "--all", "-r", "--remotes", "-l", "--list", "-v", "-vv", "-vvv",
+    "--verbose", "--show-current", "--merged", "--no-merged", "--contains",
+    "--no-contains", "--points-at", "--sort", "--format", "--color",
+    "--no-color", "--column", "--no-column", "-q", "--quiet", "-i",
+    "--ignore-case", "--omit-empty",
+))
+
+# The flags that rename or copy a branch. `git branch -m <new>` with a single
+# operand renames the branch you are standing on, which is your own.
+_YARD_BRANCH_MOVE_FLAGS = frozenset(("-m", "-M", "--move", "-c", "-C", "--copy"))
 
 # Splits a command into the links of its chain. Checking only the START of the
 # whole string, which is what the previous plan revision did, let
 # `cat <HELM>/x; rm -rf <HELM>/y` through because the string began with `cat`,
 # and refused `cd /tmp && cat <HELM>/x` because it did not. Both are fixed by
 # asking about each link.
+#
+# Its bluntness, stated because it is met in practice rather than in theory: a
+# heredoc body is split the same way, so writing a file whose CONTENT quotes a
+# refused command is itself refused. Twice while writing the commit message for
+# this change. That is the safe direction and the same trade the redirection
+# check below makes, and the workaround is one tool call (write the file with
+# the Write tool, not with `cat <<EOF`). A shell-accurate parse here would be a
+# second shell in this file.
 _YARD_CHAIN_RE = re.compile(r"(?:&&|\|\||;|\||\n)")
 
 
@@ -3434,15 +3513,60 @@ def _yard_segment_is_read_only(segment: str) -> bool:
         return True
     verb = words[0].rsplit("/", 1)[-1]
     if verb == "git":
-        subcommand = next((w for w in words[1:] if not w.startswith("-")), "")
-        # `git -C <path> log` puts a value between the flag and the verb, so the
-        # first non-flag word can be the path. Take the last candidate instead.
-        candidates = [w for w in words[1:] if not w.startswith("-")]
-        if candidates:
-            subcommand = next(
-                (w for w in candidates if w in _YARD_READ_ONLY_GIT), "")
+        subcommand = _yard_git_subcommand(words)
+        if subcommand in ("branch", "worktree"):
+            return _yard_git_subcommand_is_listing(subcommand, words)
         return subcommand in _YARD_READ_ONLY_GIT
     return verb in _YARD_READ_ONLY_VERBS
+
+
+def _yard_git_subcommand(words: list[str]) -> str:
+    """The git verb of one link, or "".
+
+    `git -C <path> log` puts a value between the flag and the verb, so the first
+    non-flag word can be the path. The first RECOGNISED verb is taken instead.
+    """
+    return next((w for w in words[1:]
+                 if not w.startswith("-") and w in _YARD_GIT_VERBS), "")
+
+
+def _yard_git_operands(subcommand: str, words: list[str]) -> list[str]:
+    """The non-flag words after `subcommand`, unquoted."""
+    rest = words[words.index(subcommand) + 1:]
+    return [w.strip("'\"") for w in rest if not w.startswith("-")]
+
+
+def _yard_git_flags(subcommand: str, words: list[str]) -> list[str]:
+    """The flags of the SUBCOMMAND, with any `=value` dropped.
+
+    After the subcommand only. Anything before it belongs to `git` itself
+    (`-C <path>`, `--no-pager`) and says nothing about whether the subcommand
+    lists or mutates; counting those made `git --no-pager branch` look like a
+    mutation.
+    """
+    rest = words[words.index(subcommand) + 1:]
+    return [w.split("=", 1)[0] for w in rest if w.startswith("-")]
+
+
+def _yard_git_subcommand_is_listing(subcommand: str, words: list[str]) -> bool:
+    """True for the read-only form of `git branch` / `git worktree`.
+
+    `branch` lists when every flag it carries is a listing flag AND it either
+    names nothing or carries a flag that takes a pattern or a commit
+    (`--list 'feat/*'`, `--contains HEAD`). A bare `git branch <name>` CREATES a
+    branch in the shared refs, which is not a read.
+
+    `worktree` lists only as `git worktree list`. Everything else it can do —
+    add, remove, prune, move, lock, repair — edits the one registry directory
+    that every checkout of this repository shares.
+    """
+    if subcommand == "worktree":
+        return _yard_git_operands(subcommand, words)[:1] == ["list"]
+    flags = _yard_git_flags(subcommand, words)
+    if any(flag not in _YARD_BRANCH_LISTING_FLAGS for flag in flags):
+        return False
+    operands = _yard_git_operands(subcommand, words)
+    return not operands or bool(flags)
 
 
 def _yard_data_roots(helm: Path) -> list[Path]:
@@ -3480,6 +3604,181 @@ def _yard_is_under(path: Path, parent: Path) -> bool:
         return False
 
 
+def _yard_mine() -> Path:
+    """This checkout's root. `WORKSPACE` is this file's own tree, so in a YARD
+    it is the YARD, with no environment variable in the chain."""
+    try:
+        return WORKSPACE.resolve()
+    except OSError:
+        return WORKSPACE
+
+
+def _yard_registry(helm: Path) -> Path:
+    return helm / ".git" / "worktrees"
+
+
+def _yard_foreign_roots(helm: Path) -> list[Path]:
+    """Every checkout of this repository that is neither mine nor HELM.
+
+    Read from the registry git keeps for itself:
+    `<HELM>/.git/worktrees/<name>/gitdir` holds the path of that worktree's
+    `.git` FILE, so its parent is that worktree's root. A directory listing and
+    a handful of small reads, no subprocess, because this runs on every tool
+    call.
+
+    Not `git worktree list`: that is a subprocess on the hot path, and it
+    answers from the same file this reads.
+    """
+    mine = _yard_mine()
+    roots: list[Path] = []
+    try:
+        entries = sorted(_yard_registry(helm).iterdir())
+    except OSError:
+        return roots                       # no registry: nothing to enumerate
+    for entry in entries:
+        try:
+            pointer = (entry / "gitdir").read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not pointer:
+            continue
+        root = Path(pointer).parent
+        with contextlib.suppress(OSError):
+            root = root.resolve()
+        if root != mine and root != helm and root not in roots:
+            roots.append(root)
+    return roots
+
+
+def _yard_foreign_checkout_containing(path: Path, helm: Path) -> Path | None:
+    """The root of ANOTHER checkout of this repository that contains `path`.
+
+    A second, independent signal, and it is here because the registry above can
+    itself be the casualty: on 2026-09-03 a test fixture's `shutil.rmtree`
+    emptied `<HELM>/.git/worktrees` and every live YARD lost its entry. A
+    worktree whose registration is gone still has its `.git` FILE, and that file
+    still points into this repository's registry directory, so it is still
+    recognisable as a checkout of this repository.
+
+    Walks up from `path`, which need not exist — a Write names a file that is
+    about to be created. Stops at `mine` and at HELM, which the callers answer
+    for themselves.
+    """
+    mine = _yard_mine()
+    prefix = str(_yard_registry(helm))
+    for candidate in (path, *path.parents):
+        if candidate in (mine, helm):
+            return None
+        dot_git = candidate / ".git"
+        try:
+            if not dot_git.is_file():
+                continue
+            pointer = dot_git.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if pointer.startswith("gitdir:"):
+            pointer = pointer.split(":", 1)[1].strip()
+        if pointer.startswith(prefix):
+            return candidate
+    return None
+
+
+def _yard_foreign_reason(where: Path) -> str:
+    return (
+        f"YARD isolation guard — intentional policy block, not an error. "
+        f"{where} is ANOTHER YARD: a different task's worktree of this same "
+        f"repository.\n\n"
+        f"A YARD sees three things and no more: its own checkout, HELM (read "
+        f"only), and the data overlay (files yes, git no). A neighbour is none "
+        f"of them, so nothing here is permitted against it — not a read, not a "
+        f"write, not a git operation naming its path. Its branch is unmerged, "
+        f"its working tree is somebody's half-finished change, and a session is "
+        f"very likely standing in it right now.\n\n"
+        f"If you need what is in it, ask for it in HELM, which sees every "
+        f"branch of this repository already."
+    )
+
+
+def _yard_shared_git_refusal(words: list[str], own_branch: str | None) -> str | None:
+    """Refuse the git operations that edit the ONE directory every checkout shares.
+
+    These need no path to do their damage, so no path check can catch them.
+    `git branch -D` and `git worktree prune|remove|add` run from inside a YARD
+    reach across the whole repository: the refs and the worktree registry live
+    in HELM's `.git`, and every worktree is a client of it. MEASURED 2026-09-04
+    from a live YARD, before this existed: all four were permitted.
+
+    Your own branch and your own worktree are the exception, because those are
+    yours to edit.
+    """
+    subcommand = _yard_git_subcommand(words)
+    if subcommand not in ("branch", "worktree"):
+        return None
+    if _yard_git_subcommand_is_listing(subcommand, words):
+        return None
+    operands = _yard_git_operands(subcommand, words)
+
+    if subcommand == "branch":
+        flags = _yard_git_flags(subcommand, words)
+        # A move or copy with ONE operand names the new name and renames the
+        # branch you are standing on. Its bound, stated rather than left to be
+        # found: `git branch -m <old> <new>` carries two operands and is refused
+        # even when `<old>` is your own, because the guard would then have to
+        # decide which operand is the source.
+        if len(operands) == 1 and any(f in _YARD_BRANCH_MOVE_FLAGS for f in flags):
+            return None
+        if operands and own_branch and all(op == own_branch for op in operands):
+            return None
+        return (
+            "YARD isolation guard — intentional policy block, not an error. "
+            "This edits a branch of the SHARED repository from a YARD.\n\n"
+            "Every worktree of this repository reads and writes ONE set of "
+            "refs, kept in HELM's `.git`. A branch you delete here is deleted "
+            "for the session standing in it, and a task branch that has not "
+            "been merged is not recoverable from a worktree that no longer has "
+            "it checked out.\n\n"
+            "Your own branch is yours. Everybody else's is HELM's, and HELM is "
+            "where branches are reviewed and removed."
+        )
+
+    return (
+        "YARD isolation guard — intentional policy block, not an error. "
+        "This edits the worktree REGISTRY, which every checkout of this "
+        "repository shares.\n\n"
+        "`<HELM>/.git/worktrees` is one directory holding one entry per live "
+        "worktree. `prune` reaches every entry in it, including those of "
+        "sessions running right now; `remove` and `add` change which checkouts "
+        "exist at all. On 2026-09-03 that directory was emptied and every live "
+        "YARD lost the ability to run a single git command until the operator "
+        "rebuilt the entries by hand.\n\n"
+        "`git worktree list` reads it and is permitted. Creating and removing "
+        "worktrees is HELM's, which is the one checkout that can see them all."
+    )
+
+
+def _yard_own_branch() -> str | None:
+    """The branch THIS worktree has checked out, or None (detached, or unknown).
+
+    Read from this worktree's own `HEAD`, reached through the `gitdir:` pointer
+    in its `.git` file. No subprocess. None is the safe answer: it makes the
+    own-branch exception above match nothing, so a branch operation is refused
+    rather than permitted on a guess.
+    """
+    try:
+        pointer = (WORKSPACE / ".git").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not pointer.startswith("gitdir:"):
+        return None
+    try:
+        head = (Path(pointer.split(":", 1)[1].strip()) / "HEAD").read_text(
+            encoding="utf-8").strip()
+    except OSError:
+        return None
+    marker = "ref: refs/heads/"
+    return head[len(marker):] if head.startswith(marker) else None
+
+
 def _yard_segment_names(segment: str, root: Path) -> bool:
     """True when the command text names `root` or something inside it.
 
@@ -3502,13 +3801,23 @@ def _yard_deny(reason: str) -> dict:
     return {"decision": "block", "reason": reason, "_policy_deny": True}
 
 
+_YARD_WRITING_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
+
+# Reading tools reach this dispatcher too, and until 2026-09-04 the wall waved
+# them through on the grounds that a read cannot damage anything. That is true
+# of HELM and of the data overlay, and it is the whole point of allowing both.
+# It is not true of a neighbouring YARD, which is a different task's unmerged
+# work: the model is that a YARD does not see one at all. So these arrive, and
+# exactly one question is asked of them.
+_YARD_READING_TOOLS = ("Read", "Grep", "Glob")
+
+
 def check_yard_write_guard(payload: dict) -> dict | None:
     tool_name = payload.get("tool_name", "")
-    # Read, Grep, Glob and the Agent matchers reach this dispatcher too. None of
-    # them writes, so they are none of this wall's business. Named rather than
-    # inferred, because "the matcher will not send it" is an assumption about a
-    # settings file and this file has been burned by one before.
-    if tool_name not in ("Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"):
+    # Named rather than inferred, because "the matcher will not send it" is an
+    # assumption about a settings file and this file has been burned by one
+    # before.
+    if tool_name not in (*_YARD_WRITING_TOOLS, *_YARD_READING_TOOLS, "Bash"):
         return None
 
     try:
@@ -3531,8 +3840,27 @@ def check_yard_write_guard(payload: dict) -> dict | None:
         )
 
     cwd = Path(payload.get("cwd") or WORKSPACE)
+    foreign_roots = _yard_foreign_roots(helm)
 
-    if tool_name in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+    def _foreign(target: Path) -> Path | None:
+        """The neighbouring YARD `target` belongs to, by either signal."""
+        for root in foreign_roots:
+            if _yard_is_under(target, root):
+                return root
+        return _yard_foreign_checkout_containing(target, helm)
+
+    if tool_name in _YARD_READING_TOOLS:
+        raw = (payload.get("tool_input", {}) or {}).get("file_path") \
+            or (payload.get("tool_input", {}) or {}).get("path") \
+            or (payload.get("tool_input", {}) or {}).get("notebook_path") or ""
+        if not raw:
+            return None      # no target named, so it reads this checkout
+        target = Path(raw)
+        target = target.resolve() if target.is_absolute() else (cwd / target).resolve()
+        where = _foreign(target)
+        return _yard_deny(_yard_foreign_reason(where)) if where else None
+
+    if tool_name in _YARD_WRITING_TOOLS:
         raw = (payload.get("tool_input", {}) or {}).get("file_path") \
             or (payload.get("tool_input", {}) or {}).get("notebook_path") or ""
         if not raw:
@@ -3550,11 +3878,15 @@ def check_yard_write_guard(payload: dict) -> dict | None:
                 f"Writing files into the data overlay from here is allowed and "
                 f"expected. Only HELM is closed."
             )
+        where = _foreign(target)
+        if where:
+            return _yard_deny(_yard_foreign_reason(where))
         return None
 
     command = (payload.get("tool_input", {}) or {}).get("command", "") or ""
     if not command:
         return None
+    own_branch = _yard_own_branch()
     helm_str = str(helm)
     data_roots = _yard_data_roots(helm)
 
@@ -3599,7 +3931,30 @@ def check_yard_write_guard(payload: dict) -> dict | None:
                 f"head, tail). Change it in HELM."
             )
 
+        # A neighbour, and `read_only` is not consulted. HELM and the data
+        # overlay are readable on purpose; another task's worktree is not, so
+        # `cat <neighbour>/x` is refused for the same reason `rm -rf` of it is.
+        neighbour = next(
+            (root for root in foreign_roots
+             if _yard_segment_names(segment, root) or _yard_is_under(current, root)),
+            None) or _yard_foreign_checkout_containing(current, helm)
+        if neighbour is None and not read_only:
+            # A command that names a DIRECTORY CONTAINING a neighbour, which is
+            # how `rm -rf` of the worktree container reaches one without ever
+            # spelling its name. Only the absolute words, and only when the link
+            # is not a read: otherwise `ls <the directory they all live in>`
+            # would be refused, and that is a read of nothing but names.
+            neighbour = next(
+                (root for word in words for root in foreign_roots
+                 if word.startswith("/") and _yard_is_under(root, Path(word.strip("'\"")))),
+                None)
+        if neighbour is not None:
+            return _yard_deny(_yard_foreign_reason(neighbour))
+
         if verb == "git":
+            shared = _yard_shared_git_refusal(words, own_branch)
+            if shared is not None:
+                return _yard_deny(shared)
             if "push" in words[1:]:
                 return _yard_deny(
                     "YARD write guard — intentional policy block, not an error. "

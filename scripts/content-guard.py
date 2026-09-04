@@ -221,8 +221,17 @@ def main() -> int:
 
     if not args.quiet:
         scope = "engine surface" if args.all else f"{len(files)} file(s)"
+        # The withheld count is printed on the CLEAN line rather than buried in
+        # a flag, because it is the one number that says how much narrower this
+        # verdict is than the harvest. A floor that removes coverage silently is
+        # a worse defect than the noise it removes, and silence is what makes it
+        # one; every withheld word is a bare form whose multi-word token still
+        # guards the same entity (`_apply_ordinary_english_floor`).
+        narrowed = (f"; {len(dl.withheld)} bare ordinary-English word(s) "
+                    f"withheld, their multi-word form still guarding"
+                    if dl.withheld else "")
         print(f"{GREEN}content-guard: clean{RESET} {GRAY}({scope}; "
-              f"{len(dl.tokens)} denylist tokens){RESET}")
+              f"{len(dl.tokens)} denylist tokens{narrowed}){RESET}")
     return 0
 
 

@@ -241,12 +241,12 @@ def test_host_rank_puts_the_apex_ahead_of_every_subdomain():
 def _cbc_blob(value: bytes, key: bytes, host: bytes | None) -> bytes:
     """A v10 blob in Chromium's stored format. `host` set means schema >= 24."""
     from cryptography.hazmat.primitives import padding
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes  # content-guard: ok library class, not an org
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
     plain = (hashlib.sha256(host).digest() if host else b"") + value
     padder = padding.PKCS7(128).padder()
     padded = padder.update(plain) + padder.finalize()
-    enc = Cipher(algorithms.AES(key), modes.CBC(b" " * 16)).encryptor()  # content-guard: ok library class, not an org
+    enc = Cipher(algorithms.AES(key), modes.CBC(b" " * 16)).encryptor()
     return b"v10" + enc.update(padded) + enc.finalize()
 
 

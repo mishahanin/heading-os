@@ -50,7 +50,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -71,8 +70,34 @@ from tests.repo_files import read_sources, tracked_python_files  # noqa: E402
 # assertion read that as the wall's verdict. Each call gets its own counter, so
 # each test measures the wall and nothing else. The scratch path also keeps the
 # suite away from the real counter, which lives under the operator's data root.
-_RATE_DIR = Path(tempfile.mkdtemp(prefix="pytest-wall-rate-"))
+_RATE_DIR: Path | None = None
 _RATE_SEQ = itertools.count()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _rate_limit_scratch(tmp_path_factory):
+    """One counter directory for this whole module, inside pytest's temp tree.
+
+    NOT `tmp_path`, and the reason is the sequence counter rather than
+    convenience: `_RATE_SEQ` must NOT reset between tests, because what it buys
+    is that no two hook invocations anywhere in this file share a rate-limit
+    window. A per-test directory would make the counter's uniqueness
+    per-test-only, which is exactly the order-dependence the comment above
+    describes. The directory therefore outlives each test and is scoped to the
+    module.
+
+    NOT `tempfile.mkdtemp` at import time, which is what this was until
+    2026-09-04. That lands directly in the system temp directory, outside
+    pytest's basetemp, so pytest's own numbered-directory retention never
+    reclaimed it and nothing else did either. MEASURED 2026-09-04 on this
+    machine: 5,143 surviving `pytest-wall-rate-*` directories spanning seven
+    days -- one per import of this module, and under `-n auto` every xdist
+    worker that collects this file imports it. `tmp_path_factory` puts it under
+    the session basetemp, which pytest does reclaim.
+    """
+    global _RATE_DIR
+    _RATE_DIR = tmp_path_factory.mktemp("pytest-wall-rate")
+    return _RATE_DIR
 
 HOOK = ROOT / ".claude" / "hooks" / "_dispatch.py"
 REDIRECT = ROOT / ".claude" / "hooks" / "data-path-redirect.py"
@@ -114,6 +139,10 @@ def _verdict(payload: dict, cwd: str | None = None, data_root: str | None = None
     """
     payload = dict(payload)
     payload["cwd"] = cwd or str(ROOT)
+    # A plain assert, so a caller that reaches this before the module-scoped
+    # `_rate_limit_scratch` fixture has run names the broken invariant instead
+    # of raising TypeError on a None path.
+    assert _RATE_DIR is not None, "_rate_limit_scratch did not run for this test"
     state = _RATE_DIR / f"rate-{next(_RATE_SEQ)}.json"
     env = dict(os.environ, WS_RATE_LIMIT_STATE=str(state))
     if data_root:

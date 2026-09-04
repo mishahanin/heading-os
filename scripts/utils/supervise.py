@@ -184,6 +184,7 @@ def run_supervised(
     status_path: Optional[str] = None,
     label: str = "",
     hard_cap: Optional[float] = None,
+    log_dir: Optional[str] = None,
 ) -> dict:
     """Run ``cmd`` under a progress watchdog. See module docstring.
 
@@ -191,9 +192,23 @@ def run_supervised(
         advance) before the run is declared hung and its process group killed.
     ``hard_cap``: optional absolute ceiling in seconds (default None — rely on
         the stall window so a long-but-live step is never wrongly killed).
+    ``log_dir``: where to create the run's log file. ``None`` means the system
+        temp directory, which is right in production: the log is handed back as
+        ``verdict["log_path"]`` precisely so a human can open it AFTER the run,
+        so this function must not remove it and cannot know when they are done.
+
+        A CALLER THAT DOES NOT WANT IT TO SURVIVE PASSES ONE. Every test that
+        drives a real child through here passes a ``tmp_path``: nobody reads
+        those logs and nothing removed them, one ``/tmp/supervise-*.log`` per
+        successful run. Sixteen such call sites were found on 2026-09-04, the
+        same day /tmp on this machine was measured at 50,225 top-level entries.
+        The parameter rather than a cleanup, because removing the log would
+        break the contract the two early-failure branches below are written
+        around.
     """
     start = time.monotonic()
-    log_fd, log_path = tempfile.mkstemp(prefix="supervise-", suffix=".log")
+    log_fd, log_path = tempfile.mkstemp(prefix="supervise-", suffix=".log",
+                                        dir=log_dir)
 
     # The spawn is guarded, because the function's contract is a VERDICT DICT
     # and `Popen` raises before any verdict exists. Measured 2026-08-30:

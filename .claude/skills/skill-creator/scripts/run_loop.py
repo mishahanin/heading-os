@@ -32,8 +32,21 @@ from scripts.run_eval import EvalRunError, find_project_root, run_eval
 from scripts.utils import parse_skill_md
 
 
-def default_report_path(skill_name: str) -> Path:
+def default_report_path(skill_name: str, parent: str | Path | None = None) -> Path:
     """Return a private path for the live HTML report.
+
+    `parent` is the directory to create the report directory in. `None` means the
+    system temp directory, which is right in production: the operator opens
+    this report in a browser after the run ends, so it has to outlive the
+    process, and nothing here can know when they are finished with it.
+
+    A CALLER THAT DOES NOT WANT IT TO SURVIVE PASSES ONE. The test suite passes
+    a `tmp_path`, because a report nobody opens that nothing removes is a leak:
+    MEASURED 2026-09-04, 967 surviving `skill_report_example-skill_*`
+    directories in /tmp spanning seven days, every one of them made by
+    `tests/test_skill_creator_description_loop_guards.py` and by nothing else.
+    The parameter rather than a hardcoded pytest path, so this module keeps
+    knowing nothing about the suite.
 
     Until 2026-08-31 this was::
 
@@ -48,7 +61,8 @@ def default_report_path(skill_name: str) -> Path:
     `mkdtemp` gives an unguessable 0700 directory for one line. The report keeps
     a stable name INSIDE it, so the browser's auto-refresh still works.
     """
-    report_dir = tempfile.mkdtemp(prefix=f"skill_report_{skill_name}_")
+    report_dir = tempfile.mkdtemp(prefix=f"skill_report_{skill_name}_",
+                                  dir=None if parent is None else str(parent))
     return Path(report_dir) / "report.html"
 
 

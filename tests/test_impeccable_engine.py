@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import subprocess  # nosec B404 - invokes the repo's own checker with a fixed argv
 import sys
 from pathlib import Path
@@ -36,14 +37,32 @@ CHECKER = ROOT / "scripts" / "visual-discipline-check.py"
 FIXTURES = ROOT / "tests" / "fixtures" / "impeccable"
 
 
-def _run_checker(*args: str) -> subprocess.CompletedProcess:
-    """Invoke the checker CLI the way an operator would."""
+def _run_checker(*args: str, tmpdir: str | None = None) -> subprocess.CompletedProcess:
+    """Invoke the checker CLI the way an operator would.
+
+    `tmpdir` pins TMPDIR for the child. `run_detector` in
+    `scripts/utils/impeccable_engine.py` makes its scratch with
+    `TemporaryDirectory(prefix="impeccable-")`, which cleans itself up on every
+    path Python gets to run -- and on none where it does not. This helper's own
+    `timeout=300` and that call's `timeout=300` start at different moments, the
+    outer one first, so a slow `npx` fetch has the outer timeout SIGKILL the
+    child while it is inside the `with`. Nothing then removes the directory.
+    MEASURED 2026-09-04: one surviving `/tmp/impeccable-*` after a full run.
+
+    The child's environment is the only seam that survives a kill, since the
+    directory is chosen before Python can be told to clean it up. A `TMPDIR`
+    under `tmp_path` puts the orphan inside the tree pytest reclaims.
+    """
+    env = dict(os.environ)
+    if tmpdir is not None:
+        env["TMPDIR"] = tmpdir
     return subprocess.run(  # nosec B603 - fixed interpreter + repo-owned script
         [sys.executable, str(CHECKER), *args],
         capture_output=True,
         text=True,
         timeout=300,
         cwd=str(ROOT),
+        env=env,
     )
 
 
@@ -581,13 +600,14 @@ def test_the_version_pin_is_exact_never_a_range():
 # ---------------------------------------------------------------------------
 
 
-def test_integration_real_cli_detects_the_side_tab_fixture():
+def test_integration_real_cli_detects_the_side_tab_fixture(tmp_path):
     from scripts.utils.impeccable_engine import resolve_cli
 
     if resolve_cli() is None:
         pytest.skip("impeccable CLI unresolvable (no Node or no network)")
 
-    result = _run_checker("--deep", "--json", "--no-baseline", str(FIXTURES / "side-tab.html"))
+    result = _run_checker("--deep", "--json", "--no-baseline",
+                          str(FIXTURES / "side-tab.html"), tmpdir=str(tmp_path))
     assert result.returncode in (0, 1), result.stderr
     payload = json.loads(result.stdout)
     types = {f["type"] for entry in payload for f in entry["findings"]}

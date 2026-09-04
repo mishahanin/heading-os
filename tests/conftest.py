@@ -11,6 +11,7 @@ This file also holds the re-exec guard for the whole suite; see below.
 import os
 import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -1382,6 +1383,213 @@ _WORKER_SPAWN_ATTRIBUTION: dict[str, list] = {}
 _WORKER_ATTRIBUTION_ROWS = 100
 
 
+# ============================================================
+# Scratch left behind in the SHARED temp directory
+# ============================================================
+#
+# The mechanics, the measurement and the reason the two halves are weighted
+# differently all live in `tests/tmp_leak_guard.py`. What lives here is the
+# wiring: when each half is armed, who is allowed to judge, and what the
+# controller prints.
+
+from tests import tmp_leak_guard as _tmpguard  # noqa: E402
+
+_TMP_BEFORE: set[str] = set()
+_TMP_LEAK_BASELINE = _ENGINE_ROOT / "config" / "tmp-leak-baseline.json"
+
+# The config object of the session pytest actually started, captured in
+# `pytest_sessionstart`.
+#
+# WHY IDENTITY, AND NOT A FLAG. Several tests next door drive
+# `pytest_sessionfinish` directly with a SYNTHETIC session to exercise the
+# overlay ratchet's reporting, and they assert on the exact lines it writes.
+# Those tests own the overlay counters, which their fixtures reset; they do not
+# know about this guard's counters, which belong to the REAL run happening
+# around them. MEASURED 2026-09-04 against a deliberately leaking tree: three of
+# them went red -- `test_a_quiet_overlay_leaves_a_real_session_alone`,
+# `test_a_run_inside_the_budget_still_says_nothing`,
+# `test_a_moved_tree_is_reported_and_does_not_fail_the_run` -- because this
+# guard reported the real session's 116 leaks into their fake reporter and set
+# their fake session's exitstatus. Nothing was wrong with them or with the
+# guard; the two were simply reading the same module globals.
+#
+# The identity check is not a nicety: it makes the failure impossible rather
+# than unlikely. On a clean tree the counters are empty and the collision is
+# invisible, which is exactly the kind of coupling that surfaces later, in
+# somebody else's change, wearing somebody else's name.
+_REAL_SESSION_CONFIG = None
+
+# Folded up from the workers, same shape as the overlay map above:
+# nodeid -> [count, one example path].
+_WORKER_TMP_ATTRIBUTION: dict[str, list] = {}
+_WORKER_TMP_TOTAL = [0]
+_WORKER_TMP_ROWS = 100
+
+
+def _managed_temp_root(config) -> Path:
+    """The tree pytest reclaims on its own, which this guard does not police.
+
+    NOT `getbasetemp()`, which is this session's numbered directory (and, in an
+    xdist worker, a `popen-gwN` inside it). The retention that matters is
+    `make_numbered_dir_with_cleanup(keep=3)` and it prunes one level ABOVE the
+    numbered directory, so the whole of `/tmp/pytest-of-<user>` dies on pytest's
+    schedule and nothing under it is a leak. Walking up to the child of the
+    shared temp directory finds that level from either depth without hardcoding
+    either one.
+
+    An explicit `--basetemp` can point anywhere, including outside the shared
+    temp directory. The walk then terminates without a match and the basetemp
+    itself is returned, which is the right answer: the caller named that
+    directory and owns it.
+    """
+    factory = getattr(config, "_tmp_path_factory", None)
+    if factory is None:
+        # No temp factory means no managed tree; treat everything as unmanaged
+        # rather than silently exempting the shared root itself.
+        return Path(tempfile.gettempdir()) / "pytest-no-basetemp"
+    base = Path(factory.getbasetemp()).resolve()
+    shared = Path(tempfile.gettempdir()).resolve()
+    node = base
+    while node.parent != node:
+        if node.parent == shared:
+            return node
+        node = node.parent
+    return base
+
+
+def _tmp_leak_baseline() -> int:
+    """The frozen count of surviving unmanaged entries, or 0 when unreadable.
+
+    Fails toward STRICT, for the reason `_overlay_reachability_baseline` gives:
+    a deleted baseline must go red, not quiet.
+    """
+    import json
+    try:
+        data = json.loads(_TMP_LEAK_BASELINE.read_text(encoding="utf-8"))
+        return int(data["surviving_unmanaged_entries"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0
+
+
+def pytest_runtest_logstart(nodeid, location):
+    """Name the test that is about to run, so an allocation can be attributed.
+
+    `logstart` rather than `setup`: it fires before the setup phase, so a
+    fixture that allocates is attributed to the test that requested it rather
+    than to whatever ran previously.
+    """
+    _tmpguard.CURRENT_TEST = nodeid
+
+
+def _tmp_leak_sessionfinish(session):
+    """Report both halves; enforce only the attributable one.
+
+    Collect-only sessions are exempt for the same reason the overlay watch
+    exempts them: they run no test body, so they cannot be the writer, and their
+    sub-second window lands on whatever else the machine did in that second.
+    """
+    # A synthetic session belongs to whichever test built it; see
+    # `_REAL_SESSION_CONFIG` above for what this prevents and the measurement
+    # behind it.
+    if session.config is not _REAL_SESSION_CONFIG:
+        return
+    if session.config.getoption("collectonly", False):
+        return
+
+    mine = _tmpguard.survivors()
+    worker = hasattr(session.config, "workerinput")
+    if worker:
+        # A worker reports upward and judges nothing. Without this the gate
+        # would bind only to single-process runs, and the suite is run under
+        # `-n auto`; a guard that only fires where nobody looks is decoration.
+        output = getattr(session.config, "workeroutput", None)
+        if output is not None:
+            output["tmp_leak_survivors"] = len(mine)
+            output["tmp_leak_by_test"] = _tmpguard.survivors_by_test(_WORKER_TMP_ROWS)
+        return
+
+    total = len(mine) + _WORKER_TMP_TOTAL[0]
+    attribution = {who: [count, example] for who, count, example
+                   in _tmpguard.survivors_by_test(_WORKER_TMP_ROWS)}
+    _tmpguard.merge_rows(
+        [(who, count, example) for who, (count, example)
+         in _WORKER_TMP_ATTRIBUTION.items()],
+        into=attribution)
+
+    # THE SAME AGGREGATION TRAP the overlay ratchet hit on 2026-09-03: under
+    # `-n auto` the controller runs no test bodies, so its own count is 0 and a
+    # gate enforcing against 0 would pass every sharded run while printing a
+    # number. A sharded run whose workers reported nothing says so and enforces
+    # nothing.
+    sharded = bool(session.config.getoption("numprocesses", None))
+    aggregation_lost = sharded and _WORKER_TMP_TOTAL[0] == 0
+    baseline = _tmp_leak_baseline()
+    enforced = _OWNS_OVERLAY_WATCH and not aggregation_lost
+    over = enforced and total > baseline
+
+    # THE DIFF NEVER SPEAKS ON ITS OWN, and this is a correction, not a taste
+    # call. The first draft printed whenever the shared temp directory had
+    # gained an entry, which on this machine is every run: two other worktrees,
+    # the main clone, the daemons and every browser write there. MEASURED
+    # 2026-09-04 over a full run, 24 entries appeared of which 18 were nobody's
+    # business of this suite's. That turned a gate into a line printed every
+    # time, which `test_a_run_inside_the_budget_still_says_nothing` already
+    # forbids next door in as many words: a report that always prints is not a
+    # gate.
+    #
+    # So the attributable half decides whether anything is said, and the diff is
+    # printed only BESIDE a finding, as the context that can see a child
+    # process's scratch. A quiet run stays silent.
+    if not over and not mine and not _WORKER_TMP_TOTAL[0]:
+        return
+    observed = _tmpguard.appeared_and_survived(_TMP_BEFORE,
+                                               _tmpguard.top_level_snapshot())
+
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is None:
+        if over:
+            session.exitstatus = 1
+        return
+
+    established = [
+        f"{total} entry/entries created by THIS run outside pytest's managed "
+        f"tree and still on disk (frozen baseline {baseline}"
+        + ("" if enforced else ", not enforced: " + (
+            "sharded run and no worker total arrived, so this number is NOT "
+            "the run's" if aggregation_lost else "nested pytest"))
+        + ")",
+    ]
+    rows = sorted(attribution.items(), key=lambda kv: (-kv[1][0], kv[0]))[:10]
+    if rows:
+        established.append(
+            "by test: " + "; ".join(f"{count}x {who} -> {example}"
+                                    for who, (count, example) in rows))
+
+    reporter.write_line("")
+    label = "ERROR" if over else "NOTE"
+    reporter.write_line(f"{label}: temp-directory leak. " + " | ".join(established),
+                        red=over, yellow=not over)
+    if observed:
+        reporter.write_line(
+            f"ALSO OBSERVED, and NOT established as this run's: {len(observed)} "
+            f"top-level entry/entries appeared in {tempfile.gettempdir()} during "
+            f"this session and are still there ("
+            + ", ".join(_tmpguard.summarise(observed)[:8])
+            + "). Every other process on this machine writes there too, so this "
+            "is an upper bound, never an accusation of a test. It is the only "
+            "half that can see a CHILD process's scratch, which is why it is "
+            "printed rather than dropped.", yellow=True)
+    if over:
+        first = (f" Start with {rows[0][0]} ({rows[0][1][0]} entry/entries)."
+                 if rows else " No test could be named.")
+        reporter.write_line(
+            "More scratch survived outside pytest's managed tree than the "
+            f"frozen {baseline}. Pass `dir=` pointing at a `tmp_path`, or take "
+            "the directory from `tmp_path_factory`, in the named test."
+            + first, red=True)
+        session.exitstatus = 1
+
+
 @pytest.hookimpl(optionalhook=True)
 def pytest_testnodedown(node, error):
     """Sum each worker's reachable-child count into the controller's total.
@@ -1406,11 +1614,24 @@ def pytest_testnodedown(node, error):
         output.get("overlay_reachable_by_test") or (),
         unattributed=int(output.get("overlay_reachable_unattributed", 0) or 0),
         into=_WORKER_SPAWN_ATTRIBUTION)
+    # Same fold, for the temp-directory guard. It rides this hook rather than
+    # adding a second one: xdist gives each node exactly one teardown, and two
+    # implementations of `pytest_testnodedown` in one conftest is a shape that
+    # silently drops one of them.
+    _WORKER_TMP_TOTAL[0] += int(output.get("tmp_leak_survivors", 0) or 0)
+    _tmpguard.merge_rows(output.get("tmp_leak_by_test") or (),
+                         into=_WORKER_TMP_ATTRIBUTION)
 
 
 def pytest_sessionstart(session):
-    global _RESTORE_SOCKET_GUARD
+    global _RESTORE_SOCKET_GUARD, _TMP_BEFORE, _REAL_SESSION_CONFIG
     _RESTORE_SOCKET_GUARD = _install_socket_guard()
+    _REAL_SESSION_CONFIG = session.config
+    # Both halves of the temp-directory guard, armed before any test body runs.
+    # The snapshot has to be first, or every entry this session's own setup
+    # creates reads as pre-existing.
+    _TMP_BEFORE = _tmpguard.top_level_snapshot()
+    _tmpguard.arm(_managed_temp_root(session.config))
     # MODE_REFUSE explicitly, never the environment's answer. `arm()` defaults to
     # `resolve_mode()`, which honours `HEADING_OS_OVERLAY_GUARD=record`, and a
     # test run must not be softened to logging by a variable someone exported for
@@ -1443,6 +1664,11 @@ def _overlay_reachability_baseline() -> int:
 
 
 def pytest_sessionfinish(session, exitstatus):
+    # First, and outside the overlay watch's own early returns: the temp-leak
+    # guard is armed unconditionally in `pytest_sessionstart`, so gating it on
+    # `_WATCH_BEFORE` would make it dormant in exactly the runs where the
+    # overlay watch happens not to be.
+    _tmp_leak_sessionfinish(session)
     if not _guard._WATCH_BEFORE:
         return
     # A collect-only session imports modules and runs no test body, so it cannot

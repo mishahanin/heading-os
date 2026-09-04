@@ -203,21 +203,50 @@ def test_the_refusal_is_not_swallowed_by_the_loop():
 # ---------------------------------------------------------------- F14
 
 
-def test_the_live_report_path_is_not_guessable_from_the_skill_and_the_clock():
-    first = run_loop_mod.default_report_path("example-skill")
-    second = run_loop_mod.default_report_path("example-skill")
+# Every call below passes `parent=tmp_path`. `default_report_path` defaults to the
+# system temp directory ON PURPOSE -- in production the operator opens the report
+# in a browser after the run ends, so it has to outlive the process. Under pytest
+# nobody opens it and nothing removed it: MEASURED 2026-09-04, 967 surviving
+# `skill_report_example-skill_*` directories in /tmp over seven days, all from
+# this file. The `dir` argument is what these three tests exist to hand it.
+
+
+def test_the_live_report_path_is_not_guessable_from_the_skill_and_the_clock(tmp_path):
+    first = run_loop_mod.default_report_path("example-skill", parent=tmp_path)
+    second = run_loop_mod.default_report_path("example-skill", parent=tmp_path)
     assert first != second, "two runs of the same skill produced the same report path"
     assert first.parent != second.parent
 
 
-def test_the_live_report_directory_is_owner_only():
-    path = run_loop_mod.default_report_path("example-skill")
+def test_the_live_report_directory_is_owner_only(tmp_path):
+    path = run_loop_mod.default_report_path("example-skill", parent=tmp_path)
     mode = stat.S_IMODE(path.parent.stat().st_mode)
     assert mode == 0o700, f"report directory mode is {oct(mode)}, not 0o700"
 
 
-def test_the_live_report_path_is_writable_and_lands_inside_its_own_directory():
-    path = run_loop_mod.default_report_path("example-skill")
+def test_the_live_report_path_is_writable_and_lands_inside_its_own_directory(tmp_path):
+    path = run_loop_mod.default_report_path("example-skill", parent=tmp_path)
     path.write_text("<html></html>", encoding="utf-8")
     assert path.read_text(encoding="utf-8") == "<html></html>"
     assert sorted(p.name for p in path.parent.iterdir()) == [path.name]
+
+
+def test_the_default_parent_is_still_the_system_temp_directory():
+    """The `dir` argument must not have moved the production default.
+
+    `mkdtemp(dir=None)` is what puts the live report somewhere the operator's
+    browser can reach after the process exits. Asserting the parent rather than
+    the call, so replacing the body with a hardcoded path is still caught. The
+    directory is removed here, which is the whole difference from the three
+    tests above.
+    """
+    import shutil
+    import tempfile
+
+    path = run_loop_mod.default_report_path("example-skill")
+    try:
+        assert path.parent.parent == Path(tempfile.gettempdir()), (
+            f"the default report parent is {path.parent.parent}, not the system "
+            f"temp directory")
+    finally:
+        shutil.rmtree(path.parent, ignore_errors=True)

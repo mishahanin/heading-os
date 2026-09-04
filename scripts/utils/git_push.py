@@ -574,12 +574,25 @@ def supervised_push(
     stall_window: float = 120.0,
     status_path: Optional[str] = None,
     label: Optional[str] = None,
+    log_dir: Optional[str] = None,
 ) -> dict:
     """Push ``repo`` to ``remote/branch`` under the progress watchdog and verify
     the ref actually advanced (``ahead/behind == 0 0``) before reporting success.
 
     Returns the ``run_supervised`` verdict dict (state ∈ ok/failed/hung/
     postcondition_failed). The caller decides what a non-"ok" state means.
+
+    ``log_dir`` is forwarded verbatim to ``run_supervised``: where to put the
+    run's log, ``None`` meaning the system temp directory. Production wants
+    exactly that default, because the log is the thing an operator opens after
+    a push that went wrong.
+
+    IT EXISTS BECAUSE THERE WAS NO SEAM. This is the only caller of
+    ``run_supervised`` outside its own tests, and four test files drive a real
+    push through it. None of them could say "do not keep the log", because the
+    parameter stopped one level below and there was nothing here to pass it to.
+    MEASURED 2026-09-04 over a full run: 20 surviving ``supervise-*.log`` files,
+    the largest remaining family after the rest of the suite was cleaned up.
     """
     repo = Path(repo)
 
@@ -696,5 +709,5 @@ def supervised_push(
     return run_supervised(
         cmd, env=run_env, stall_window=stall_window, poll=3,
         postcondition=postcondition, status_path=status_path,
-        label=label or f"push:{repo.name}",
+        label=label or f"push:{repo.name}", log_dir=log_dir,
     )

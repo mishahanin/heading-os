@@ -501,13 +501,31 @@ def test_watch_start_writes_the_state_file_and_reports_the_pid(tmp_path, monkeyp
     assert sys.modules["subprocess"].Popen is subprocess.Popen
     result = marp.watch_start(source)
 
-    assert result["ok"] is True, result
-    assert result["pid"] == 424242
-    assert state_file.is_file(), "watch_start wrote no state file"
-    state = json.loads(state_file.read_text(encoding="utf-8"))
-    assert state["pid"] == 424242
-    assert state["source_path"] == str(source)
-    assert spawned and "--watch" in spawned[0]
+    # `prepare_theme` is NOT stubbed here (only `Popen` and the binary resolver
+    # are), so this test really did write a `31c-marp-*.css` into the shared
+    # temp directory. `render` unlinks its theme in a `finally`; `watch_start`
+    # deliberately does not, because a live `marp --watch` needs the file for as
+    # long as it runs -- the cleanup belongs to `watch_stop`, and this test never
+    # starts a real watch to stop. So the test removes what the test caused.
+    # MEASURED 2026-09-04: 145 surviving `31c-marp-*.css` files in /tmp.
+    #
+    # IN A `finally`, AND THAT IS THE POINT. The first version of this cleanup
+    # sat after the assertions, so a failing assertion left the file behind --
+    # a cleanup that works only when the test passes cleans up nothing on the
+    # day it matters.
+    try:
+        assert result["ok"] is True, result
+        assert result["pid"] == 424242
+        assert state_file.is_file(), "watch_start wrote no state file"
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        assert state["pid"] == 424242
+        assert state["source_path"] == str(source)
+        assert spawned and "--watch" in spawned[0]
+    finally:
+        if state_file.is_file():
+            recorded = json.loads(state_file.read_text(encoding="utf-8"))
+            if recorded.get("theme_path"):
+                Path(recorded["theme_path"]).unlink(missing_ok=True)
 
 
 def test_watch_stop_handles_missing_state(tmp_path, monkeypatch):

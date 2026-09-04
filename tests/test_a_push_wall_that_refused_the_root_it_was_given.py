@@ -72,6 +72,43 @@ EXOTIC = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _supervisor_log_in_tmp_path(tmp_path, monkeypatch):
+    """Real pushes in this file keep their supervisor log under `tmp_path`.
+
+    `run_supervised` returns `verdict["log_path"]` so a human can open it after
+    a push that went wrong. It therefore does not remove the log, and production
+    must keep that. Under pytest nobody opens it and nothing removed it:
+    MEASURED 2026-09-04 over a full `-n auto` run, 20 surviving
+    `/tmp/supervise-*.log`, from the four test files that reach this call.
+
+    Patched at `git_push.run_supervised`, not at each `supervised_push(...)`
+    call site below. Two reasons and the second is the one that matters: most
+    of those calls are refused by a wall before any child starts, so a
+    `log_dir=` on each would be noise on the many to reach the few; and a call
+    site is a place to forget, while a test added to this file tomorrow
+    inherits this without knowing it exists.
+
+    A test that installs its own `run_supervised` fake replaces this wrapper
+    outright, which is correct: a fake spawns nothing and so leaks nothing.
+    """
+    from scripts.utils import git_push as _gp
+
+    real = _gp.run_supervised
+
+    def pinned(*a, **kw):
+        # `is None`, NOT `setdefault`. `supervised_push` forwards `log_dir`
+        # unconditionally, so the key is always PRESENT and always None unless
+        # a caller set it; `setdefault` saw the key and did nothing, and the
+        # first version of this fixture pinned nothing at all. Caught by the
+        # leak guard itself, which still named all 20 logs after the "fix".
+        if kw.get("log_dir") is None:
+            kw["log_dir"] = str(tmp_path)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(_gp, "run_supervised", pinned)
+
+
 def _repo_named(base: Path, raw: bytes) -> Path:
     """A real git repository whose directory name is `raw`, or skip."""
     target = base / os.fsdecode(raw)

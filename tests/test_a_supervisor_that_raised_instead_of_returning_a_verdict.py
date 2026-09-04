@@ -28,6 +28,13 @@ def _open_fd_count():
     return len(os.listdir("/proc/self/fd"))
 
 
+# Every call below passes `log_dir=str(tmp_path)`. `run_supervised` hands
+# `verdict["log_path"]` back for a human to open AFTER the run, so it does not
+# remove the log and must not -- in production that is the point. Under pytest
+# nobody opens it and nothing removed it: one `/tmp/supervise-*.log` survived
+# every test here that starts a child. MEASURED 2026-09-04, the day /tmp on
+# this machine was counted at 50,225 top-level entries.
+
 def test_a_missing_binary_returns_a_failed_verdict_not_an_exception():
     verdict = run_supervised(["/nonexistent-binary-jamesbond"], label="probe")
     assert verdict["state"] == "failed"
@@ -107,6 +114,16 @@ def test_the_log_the_supervisor_makes_lands_where_this_test_can_see_it(
 
     A SUCCESSFUL run keeps its log and returns the path, so this proves the
     redirect reaches the real mkstemp call.
+
+    THE ONE CALL IN THIS FILE THAT DELIBERATELY OMITS `log_dir`, added
+    2026-09-04. The parameter exists so callers who do not want the log to
+    survive can say so, and every other real-child call here passes a
+    `tmp_path`. This one must not: what it pins is the DEFAULT, that with no
+    `log_dir` the supervisor still writes into `tempfile.gettempdir()`. Passing
+    one here would make the assertion below trivially true against `tmp_path`
+    and blind the stranding check in the test above, which is the exact failure
+    this test's own docstring describes. It leaks nothing, because `tempdir` is
+    redirected under `tmp_path` two lines down.
     """
     logdir = tmp_path / "supervise-tmp"
     logdir.mkdir()
@@ -132,18 +149,20 @@ def test_the_status_file_records_the_failed_spawn(tmp_path):
     assert json.loads(status.read_text(encoding="utf-8"))["state"] == "failed"
 
 
-def test_a_command_that_does_start_is_still_supervised_normally():
+def test_a_command_that_does_start_is_still_supervised_normally(tmp_path):
     """The control: the guard must not swallow a real run."""
     verdict = run_supervised([sys.executable, "-c", "print('ok')"],
-                             stall_window=10.0, poll=0.3)
+                             stall_window=10.0, poll=0.3,
+                             log_dir=str(tmp_path))
     assert verdict["state"] == "ok"
     assert verdict["exit_code"] == 0
     assert verdict["log_path"], "a successful run must still name its log"
 
 
-def test_a_command_that_exits_non_zero_is_still_failed_with_an_exit_code():
+def test_a_command_that_exits_non_zero_is_still_failed_with_an_exit_code(tmp_path):
     """The negative case: not every failure became a spawn failure."""
     verdict = run_supervised([sys.executable, "-c", "raise SystemExit(3)"],
-                             stall_window=10.0, poll=0.3)
+                             stall_window=10.0, poll=0.3,
+                             log_dir=str(tmp_path))
     assert verdict["state"] == "failed"
     assert verdict["exit_code"] == 3

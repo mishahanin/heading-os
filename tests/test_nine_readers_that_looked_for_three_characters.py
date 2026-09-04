@@ -33,9 +33,9 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import itertools
 import re
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -87,6 +87,42 @@ DOCUMENTS = {
 REFUSED = "REFUSED"
 
 
+# ---------------------------------------------------------------------------
+# Scratch directories, inside pytest's temp tree
+# ---------------------------------------------------------------------------
+#
+# Eight sites in this file called `tempfile.mkdtemp()` bare. Bare means the
+# system temp directory, which is OUTSIDE pytest's basetemp, so pytest's own
+# numbered-directory retention never saw them and nothing else removed them.
+# They are part of the ~878 default-prefixed `tmp*` entries MEASURED in /tmp on
+# 2026-09-04, in a tree that had by then reached 50,225 top-level entries.
+#
+# A module-scoped parent rather than a `tmp_path` per test, because every one of
+# the eight sits inside a plain helper -- `_tmpfile` and the reader adapters --
+# that the reader table calls positionally. Threading a fixture argument through
+# all of them would rewrite the table for no behavioural gain.
+# `tmp_path_factory` puts the parent under the session basetemp, which pytest
+# does reclaim.
+
+_SCRATCH: Path | None = None
+_SCRATCH_SEQ = itertools.count()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _scratch_root(tmp_path_factory):
+    global _SCRATCH
+    _SCRATCH = tmp_path_factory.mktemp("nine-readers")
+    return _SCRATCH
+
+
+def _scratch_dir() -> Path:
+    """A fresh empty directory under this module's scratch parent."""
+    assert _SCRATCH is not None, "_scratch_root did not run for this test"
+    d = _SCRATCH / f"d{next(_SCRATCH_SEQ)}"
+    d.mkdir()
+    return d
+
+
 def _canonical(text: str) -> str:
     block, _body, kind = split_frontmatter(text)
     if block is None or kind != FM_OK:
@@ -95,7 +131,7 @@ def _canonical(text: str) -> str:
 
 
 def _tmpfile(text: str, name: str = "doc.md") -> Path:
-    path = Path(tempfile.mkdtemp()) / name
+    path = _scratch_dir() / name
     path.write_text(text, encoding="utf-8", newline="")
     return path
 
@@ -115,7 +151,7 @@ def _r_viraid(text: str) -> str:
 
 
 def _r_router_payload(text: str) -> str:
-    d = Path(tempfile.mkdtemp())
+    d = _scratch_dir()
     (d / "SKILL.md").write_text(text, encoding="utf-8", newline="")
     # This reader returns `description`, so the fixture carries the title there
     # too; what is under test is whether it finds the block at all.
@@ -126,7 +162,7 @@ def _r_router_payload(text: str) -> str:
 
 
 def _r_run_skill_eval(text: str) -> str:
-    d = Path(tempfile.mkdtemp())
+    d = _scratch_dir()
     (d / "SKILL.md").write_text(text, encoding="utf-8", newline="")
     _body, fm = RSE.load_skill_system_prompt(d)
     return fm.get("title", REFUSED)
@@ -270,7 +306,7 @@ def test_an_unreadable_crm_file_is_named_rather_than_swallowed(tmp_path, capsys)
 def test_the_eval_prompt_no_longer_carries_the_yaml_block():
     """This one failed OPEN: `body = text` kept the whole file as the SYSTEM
     prompt, and `model:` was lost so the run silently used the default model."""
-    d = Path(tempfile.mkdtemp())
+    d = _scratch_dir()
     (d / "SKILL.md").write_text("--- \nname: s\nmodel: claude-opus-5\n---\n\n"
                                 "# The skill body\n", encoding="utf-8")
     body, fm = RSE.load_skill_system_prompt(d)
@@ -281,7 +317,7 @@ def test_the_eval_prompt_no_longer_carries_the_yaml_block():
 
 def test_the_skill_validator_accepts_a_fence_with_trailing_whitespace():
     QV = _load(".claude/skills/skill-creator/scripts/quick_validate.py", "quick_validate_s55")
-    d = Path(tempfile.mkdtemp())
+    d = _scratch_dir()
     (d / "SKILL.md").write_text(
         "--- \nname: demo-skill\ndescription: A demo skill for the test suite.\n"
         "metadata:\n  author: Misha Hanin\n  email: misha.hanin@odinix.com\n"
@@ -293,10 +329,10 @@ def test_the_skill_validator_accepts_a_fence_with_trailing_whitespace():
 def test_the_skill_validator_still_names_its_two_refusals_apart():
     """"No frontmatter" and "invalid format" are different findings."""
     QV = _load(".claude/skills/skill-creator/scripts/quick_validate.py", "quick_validate_s55b")
-    d1 = Path(tempfile.mkdtemp())
+    d1 = _scratch_dir()
     (d1 / "SKILL.md").write_text("# no frontmatter at all\n", encoding="utf-8")
     assert QV.validate_skill(d1) == (False, "No YAML frontmatter found")
-    d2 = Path(tempfile.mkdtemp())
+    d2 = _scratch_dir()
     (d2 / "SKILL.md").write_text("---\nname: x\n\n# never closed\n", encoding="utf-8")
     assert QV.validate_skill(d2) == (False, "Invalid frontmatter format")
 
@@ -341,7 +377,7 @@ def test_the_chronicle_keeps_a_title_containing_dashes(tmp_path, monkeypatch):
 def test_the_router_payload_refuses_what_the_engine_refuses():
     """Fail-open on a malformed opener built the judge payload from a file the
     rest of the engine treats as having no frontmatter."""
-    d = Path(tempfile.mkdtemp())
+    d = _scratch_dir()
     (d / "SKILL.md").write_text("---extra\nname: s\ndescription: alpha beta\n---\n\n# b\n",
                                 encoding="utf-8")
     assert load_skill_description(d) == ""
@@ -349,7 +385,7 @@ def test_the_router_payload_refuses_what_the_engine_refuses():
 
 def test_the_router_payload_still_reads_a_folded_description():
     """The raw line scan stays: the judge sees the author's own wording."""
-    d = Path(tempfile.mkdtemp())
+    d = _scratch_dir()
     (d / "SKILL.md").write_text(
         "--- \nname: s\ndescription: >\n  alpha beta\n  gamma\nother: x\n---\n\n# b\n",
         encoding="utf-8")

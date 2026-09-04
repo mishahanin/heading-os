@@ -19,7 +19,9 @@ the runner skips is worse than no test file, because the directory listing says
 the behaviour is covered.
 """
 
+import itertools
 import json
+import shutil
 import sys
 import tempfile
 from datetime import datetime, timedelta
@@ -115,7 +117,47 @@ def _snapshot(root: Path):
     return {p: p.stat().st_mtime_ns for p in root.rglob("*") if p.is_file()}
 
 
-def main():
+def _scratch_minter(parent: Path):
+    """Mint the ~30 throwaway fixture roots `main()` needs, all under one parent.
+
+    Every one of these used to be its own `tempfile.mkdtemp(prefix="odin-cad-...")`
+    directly in the system temp directory, and nothing ever removed one. Directly
+    in /tmp means outside pytest's basetemp, so pytest's own numbered-directory
+    retention never reclaimed them either: MEASURED 2026-09-04 on this machine,
+    10,751 surviving `odin-cad*` entries spanning seven days, the largest single
+    family in a /tmp that had reached 50,225 top-level entries.
+
+    Under a parent the caller owns, one `rmtree` reclaims all of them, and under
+    pytest that parent is a `tmp_path` the session removes on its own schedule.
+    The names keep their old prefixes so a directory that does escape is still
+    traceable to the case that made it.
+    """
+    counter = itertools.count()
+
+    def mint(prefix: str) -> Path:
+        d = parent / f"{prefix}{next(counter)}"
+        d.mkdir(parents=True)
+        return d
+
+    return mint
+
+
+def main(scratch: Path | None = None):
+    """Run every cadence check. `scratch` is the parent for the fixture roots.
+
+    Called with a `tmp_path` from `test_odin_cadence` so the fixtures die with
+    the session. Standalone (`python tests/test_odin_cadence.py`) it makes its
+    own parent and removes it in a `finally`, so the CLI path leaks nothing
+    either.
+    """
+    if scratch is None:
+        owned = Path(tempfile.mkdtemp(prefix="odin-cadence-standalone-"))
+        try:
+            return main(owned)
+        finally:
+            shutil.rmtree(owned, ignore_errors=True)
+
+    new_root = _scratch_minter(scratch)
     ok = True
     today = datetime.now(get_default_tz()).date()
     iso = lambda d: d.isoformat()  # noqa: E731
@@ -130,7 +172,7 @@ def main():
     # ============================================================
     # Full fixture: threads + CRM + episodes + air-gap + allowlist
     # ============================================================
-    root = Path(tempfile.mkdtemp(prefix="odin-cadence-"))
+    root = new_root("odin-cadence-")
     marker = iso(today)  # collected today -> days_since 0
     _write(root, "knowledge/odin-brain/.last-collect", marker + "\n")
 
@@ -223,7 +265,7 @@ def main():
     # Threshold boundaries (each flips nudge independently)
     # ============================================================
     def fresh_marker(days_ago):
-        rr = Path(tempfile.mkdtemp(prefix="odin-cad-thr-"))
+        rr = new_root("odin-cad-thr-")
         _write(rr, "knowledge/odin-brain/.last-collect", iso(today - timedelta(days=days_ago)))
         return rr
 
@@ -235,7 +277,7 @@ def main():
 
     # unharvested min-1 vs min (marker today so days_since 0, no clusters)
     def root_with_entries(n_entries):
-        rr = Path(tempfile.mkdtemp(prefix="odin-cad-ent-"))
+        rr = new_root("odin-cad-ent-")
         _write(rr, "knowledge/odin-brain/.last-collect", iso(today))
         _write(rr, "threads/business/b.md", _biz_thread(
             "b", [(iso(today), f"e{i}") for i in range(n_entries)]))
@@ -250,7 +292,7 @@ def main():
     # Reflect clustering cases
     # ============================================================
     def cluster_root(episodes):
-        rr = Path(tempfile.mkdtemp(prefix="odin-cad-clu-"))
+        rr = new_root("odin-cad-clu-")
         _write(rr, "knowledge/odin-brain/.last-collect", iso(today))
         for i, (status, ents, kws) in enumerate(episodes):
             _write(rr, f"knowledge/odin-brain/episodes/e{i}.md",
@@ -287,7 +329,7 @@ def main():
     # `.last-reflect` gating: doing the work must clear the nudge
     # ============================================================
     def cluster_root_reflected(episodes, last_reflect=None):
-        rr = Path(tempfile.mkdtemp(prefix="odin-cad-refl-"))
+        rr = new_root("odin-cad-refl-")
         _write(rr, "knowledge/odin-brain/.last-collect", iso(today))
         if last_reflect:
             _write(rr, "knowledge/odin-brain/.last-reflect", last_reflect)
@@ -320,7 +362,7 @@ def main():
     # Stale-cluster escalation (age = wait of the OLDEST unreviewed episode)
     # ============================================================
     def cluster_root_created(episodes):
-        rr = Path(tempfile.mkdtemp(prefix="odin-cad-stale-"))
+        rr = new_root("odin-cad-stale-")
         _write(rr, "knowledge/odin-brain/.last-collect", iso(today))
         for i, (status, ents, kws, created) in enumerate(episodes):
             _write(rr, f"knowledge/odin-brain/episodes/e{i}.md",
@@ -408,9 +450,13 @@ def main():
     return 0 if ok else 1
 
 
-def test_odin_cadence():
-    """Collect the whole script into the suite. Failures print above as [FAIL]."""
-    assert main() == 0, "see the [FAIL] lines in captured stdout"
+def test_odin_cadence(tmp_path):
+    """Collect the whole script into the suite. Failures print above as [FAIL].
+
+    `tmp_path` is handed down so every fixture root `main()` builds lands in
+    pytest's managed tree and dies with the session.
+    """
+    assert main(tmp_path) == 0, "see the [FAIL] lines in captured stdout"
 
 
 # ---------------------------------------------------------------------------

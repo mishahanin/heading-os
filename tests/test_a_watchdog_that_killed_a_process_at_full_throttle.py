@@ -53,6 +53,13 @@ def _burn(seconds: float) -> str:
 
 
 @pytest.mark.slow
+# Every call below passes `log_dir=str(tmp_path)`. `run_supervised` hands
+# `verdict["log_path"]` back for a human to open AFTER the run, so it does not
+# remove the log and must not -- in production that is the point. Under pytest
+# nobody opens it and nothing removed it: one `/tmp/supervise-*.log` survived
+# every test here that starts a child. MEASURED 2026-09-04, the day /tmp on
+# this machine was counted at 50,225 top-level entries.
+
 def test_a_second_phase_at_full_cpu_is_not_called_deadlocked(tmp_path):
     """The first phase's ticks left the sum when its child exited."""
     (tmp_path / "burn.py").write_text(_burn(4), encoding="utf-8")
@@ -62,7 +69,7 @@ def test_a_second_phase_at_full_cpu_is_not_called_deadlocked(tmp_path):
     result = run_supervised(
         ["bash", "-c",
          f"{PY} {tmp_path / 'burn.py'}; touch {marker}; {PY} {tmp_path / 'loop.py'}"],
-        stall_window=3, poll=1)
+        stall_window=3, poll=1, log_dir=str(tmp_path))
 
     assert marker.exists(), "the first phase did not finish; the test proves nothing"
     assert result["state"] == "ok", (
@@ -96,7 +103,7 @@ def test_a_job_winding_down_its_workers_is_not_called_deadlocked(tmp_path):
         "    p.communicate()\n", encoding="utf-8")
 
     result = run_supervised([PY, str(parent), PY, str(child)],
-                            stall_window=3, poll=1)
+                            stall_window=3, poll=1, log_dir=str(tmp_path))
 
     assert result["state"] == "ok", (
         f"a job retiring its workers was reported {result['state']}: "
@@ -104,10 +111,11 @@ def test_a_job_winding_down_its_workers_is_not_called_deadlocked(tmp_path):
 
 
 @pytest.mark.slow
-def test_a_genuinely_silent_process_is_still_killed():
+def test_a_genuinely_silent_process_is_still_killed(tmp_path):
     """The guard must still do its job, or the fix traded one wrong answer
     for the other."""
-    result = run_supervised(["sleep", "30"], stall_window=3, poll=1)
+    result = run_supervised(["sleep", "30"], stall_window=3, poll=1,
+                            log_dir=str(tmp_path))
 
     assert result["state"] == "hung"
     assert "no output and no CPU progress" in result["reason"]
@@ -124,7 +132,8 @@ def test_a_process_that_only_prints_keeps_itself_alive(tmp_path):
         "    print('tick', flush=True)\n"
         "    time.sleep(0.5)\n", encoding="utf-8")
 
-    result = run_supervised([PY, str(script)], stall_window=3, poll=1)
+    result = run_supervised([PY, str(script)], stall_window=3, poll=1,
+                            log_dir=str(tmp_path))
 
     assert result["state"] == "ok"
 

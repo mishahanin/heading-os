@@ -80,6 +80,34 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _marp_child_scratch(tmp_path_factory):
+    """Pin TMPDIR for every child this module spawns, for the whole module.
+
+    This is the ONLY file that runs the real `marp` binary, and `marp-cli` is
+    node: it creates its own scratch directory in the system temp directory
+    before Python sees anything, so no `dir=` argument and no wrapper on this
+    side can reach it. MEASURED 2026-09-04, 1,431 surviving `marp-cli-*`
+    directories in /tmp, one per real render, spanning seven days.
+
+    The child's environment is the only seam. `TMPDIR` is what `os.tmpdir()`
+    reads on Linux, so pointing it at a `tmp_path_factory` directory puts the
+    child's scratch inside the tree pytest reclaims. The pin does not reach the
+    parent's own `tempfile` calls in any way that matters, because `tempfile`
+    caches `gettempdir()` on first use and this fixture never claims otherwise.
+
+    Module scope rather than per test, matching `sample_deck_result` below: the
+    expensive render happens once and every child in the module should land in
+    the same place.
+    """
+    from _pytest.monkeypatch import MonkeyPatch
+
+    patch = MonkeyPatch()
+    patch.setenv("TMPDIR", str(tmp_path_factory.mktemp("marp-child-tmp")))
+    yield
+    patch.undo()
+
+
 @pytest.fixture(scope="module")
 def sample_deck_result(tmp_path_factory):
     """Render the sample deck ONCE for the whole module.

@@ -41,7 +41,6 @@ import ast
 import importlib.util
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -248,7 +247,8 @@ def test_the_live_skill_corpus_reads_identically_through_both_gates(gates):
 
 
 def test_the_audit_no_longer_fails_a_file_over_fields_that_are_present(gates,
-                                                                       monkeypatch):
+                                                                       monkeypatch,
+                                                                       tmp_path):
     """The measured end-to-end consequence, both halves of it.
 
     Before: status FAIL, three required fields reported missing while every one
@@ -281,7 +281,12 @@ x-heading-routing:
     results = {}
     for label, desc in [("clean", "handles drift and state check"),
                         ("dashes", "handles drift --- state check")]:
-        root = Path(tempfile.mkdtemp())
+        # `tmp_path`, not `tempfile.mkdtemp()`: the latter creates directly in
+        # the system temp directory, outside pytest's basetemp, so nothing ever
+        # reclaimed it. A subdirectory per label because the loop needs two
+        # distinct workspace roots.
+        root = tmp_path / label
+        root.mkdir()
         monkeypatch.setenv("WORKSPACE_ROOT", str(root))
         d = root / "driftcheck"
         d.mkdir()

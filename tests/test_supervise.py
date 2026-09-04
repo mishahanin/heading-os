@@ -23,50 +23,58 @@ from scripts.utils.supervise import run_supervised
 PY = sys.executable
 
 
-def test_long_but_progressing_run_is_ok():
+# Every call below passes `log_dir=str(tmp_path)`. `run_supervised` hands
+# `verdict["log_path"]` back for a human to open AFTER the run, so it does not
+# remove the log and must not -- in production that is the point. Under pytest
+# nobody opens it and nothing removed it: one `/tmp/supervise-*.log` survived
+# every test here that starts a child. MEASURED 2026-09-04, the day /tmp on
+# this machine was counted at 50,225 top-level entries.
+
+def test_long_but_progressing_run_is_ok(tmp_path):
     # Prints for ~2.4s; gaps (0.3s) stay under the 2s stall window -> never hung.
     cmd = [PY, "-c",
            "import time,sys\n"
            "for i in range(8):\n"
            "    print('tick', i); sys.stdout.flush(); time.sleep(0.3)\n"]
-    v = run_supervised(cmd, stall_window=2.0, poll=0.4)
+    v = run_supervised(cmd, stall_window=2.0, poll=0.4, log_dir=str(tmp_path))
     assert v["state"] == "ok", v
     assert v["exit_code"] == 0
     assert v["elapsed_s"] >= 2.0  # it really did run a while, not killed early
 
 
-def test_silent_idle_process_is_declared_hung():
+def test_silent_idle_process_is_declared_hung(tmp_path):
     # Sleeps silently: no output, no CPU. Must be caught by the stall window
     # (~2s), killed, and reported hung -- not waited on for the full 30s.
     cmd = [PY, "-c", "import time; time.sleep(30)"]
     started = time.monotonic()
-    v = run_supervised(cmd, stall_window=2.0, poll=0.4, hard_cap=20)
+    v = run_supervised(cmd, stall_window=2.0, poll=0.4, hard_cap=20,
+                       log_dir=str(tmp_path))
     waited = time.monotonic() - started
     assert v["state"] == "hung", v
     assert waited < 10, f"watchdog waited too long ({waited:.1f}s)"
 
 
-def test_nonzero_exit_is_failed():
+def test_nonzero_exit_is_failed(tmp_path):
     cmd = [PY, "-c", "import sys; print('boom'); sys.exit(3)"]
-    v = run_supervised(cmd, stall_window=5.0, poll=0.3)
+    v = run_supervised(cmd, stall_window=5.0, poll=0.3, log_dir=str(tmp_path))
     assert v["state"] == "failed", v
     assert v["exit_code"] == 3
     assert "boom" in v["tail"]
 
 
-def test_exit_zero_but_false_postcondition_is_not_trusted():
+def test_exit_zero_but_false_postcondition_is_not_trusted(tmp_path):
     cmd = [PY, "-c", "print('done ok')"]
     v = run_supervised(cmd, stall_window=5.0, poll=0.3,
-                       postcondition=lambda: False)
+                       postcondition=lambda: False, log_dir=str(tmp_path))
     assert v["state"] == "postcondition_failed", v
     assert v["exit_code"] == 0
     assert v["postcondition_ok"] is False
 
 
-def test_exit_zero_with_true_postcondition_is_ok():
+def test_exit_zero_with_true_postcondition_is_ok(tmp_path):
     cmd = [PY, "-c", "print('done ok')"]
     v = run_supervised(cmd, stall_window=5.0, poll=0.3,
-                       postcondition=lambda: True)
+                       postcondition=lambda: True, log_dir=str(tmp_path))
     assert v["state"] == "ok", v
     assert v["postcondition_ok"] is True
 
@@ -74,7 +82,8 @@ def test_exit_zero_with_true_postcondition_is_ok():
 def test_status_file_is_written(tmp_path):
     status = tmp_path / "run.status.json"
     cmd = [PY, "-c", "print('hi')"]
-    run_supervised(cmd, stall_window=5.0, poll=0.3, status_path=str(status))
+    run_supervised(cmd, stall_window=5.0, poll=0.3, status_path=str(status),
+                   log_dir=str(tmp_path))
     assert status.exists()
     import json
     data = json.loads(status.read_text())
@@ -129,7 +138,7 @@ def test_a_failed_spawn_still_writes_its_status_file(tmp_path):
 # The two ceilings, and the postcondition that raises
 # ============================================================
 
-def test_the_hard_cap_kills_a_process_that_keeps_printing():
+def test_the_hard_cap_kills_a_process_that_keeps_printing(tmp_path):
     """`hard_cap` is the only bound on a run that is loud and never finishes.
 
     The stall window cannot see it: output keeps arriving, so the tree looks
@@ -142,20 +151,21 @@ def test_the_hard_cap_kills_a_process_that_keeps_printing():
            "while True:\n"
            "    print('tick'); sys.stdout.flush(); time.sleep(0.2)\n"]
     started = time.monotonic()
-    v = run_supervised(cmd, stall_window=60.0, poll=0.3, hard_cap=3)
+    v = run_supervised(cmd, stall_window=60.0, poll=0.3, hard_cap=3,
+                       log_dir=str(tmp_path))
     waited = time.monotonic() - started
     assert v["state"] == "hung", v
     assert "hard cap" in v["reason"], v["reason"]
     assert waited < 20, f"the cap did not fire ({waited:.1f}s)"
 
 
-def test_a_postcondition_that_raises_is_not_read_as_satisfied():
+def test_a_postcondition_that_raises_is_not_read_as_satisfied(tmp_path):
     """A predicate that blew up settled nothing, so the step is not trusted."""
     def explode():
         raise RuntimeError("the postcondition itself is broken")
 
     v = run_supervised([PY, "-c", "print('done ok')"], stall_window=5.0, poll=0.3,
-                       postcondition=explode)
+                       postcondition=explode, log_dir=str(tmp_path))
     assert v["state"] == "postcondition_failed", v
     assert v["postcondition_ok"] is False
     assert "postcondition raised" in v["reason"]
@@ -163,7 +173,7 @@ def test_a_postcondition_that_raises_is_not_read_as_satisfied():
 
 
 @pytest.mark.slow
-def test_a_child_that_exits_does_not_freeze_the_progress_signal():
+def test_a_child_that_exits_does_not_freeze_the_progress_signal(tmp_path):
     """The 2026-08-26 regression, reproduced.
 
     `_tree_cpu_ticks` sums the processes alive RIGHT NOW, so the total DROPS
@@ -185,7 +195,8 @@ def test_a_child_that_exits_does_not_freeze_the_progress_signal():
         "t=time.monotonic()\n"
         "while time.monotonic()-t<6.0: pass\n"
     )
-    v = run_supervised([PY, "-c", burner], stall_window=2.5, poll=0.4, hard_cap=40)
+    v = run_supervised([PY, "-c", burner], stall_window=2.5, poll=0.4,
+                       hard_cap=40, log_dir=str(tmp_path))
     assert v["state"] == "ok", (
         f"a busy parent was declared {v['state']}: {v['reason']}"
     )

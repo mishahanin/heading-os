@@ -778,21 +778,39 @@ def render(source: Path, output_dir: Path = None, pdf_only: bool = False,
     except OSError:
         return theme_missing_result()
 
-    # Write temp source (never mutate original). Place it next to the
-    # original so relative image paths (e.g. `![bg](_assets/foo.png)`)
-    # resolve from the same directory as the source MD.
-    tmp_source = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".md", prefix=f".{source.stem}.marp-src-",
-        dir=str(source.parent),
-        delete=False, encoding="utf-8"
-    )
-    tmp_source.write(source_text)
-    tmp_source.close()
-    tmp_source_path = Path(tmp_source.name)
+    # THE THEME IS LIVE FROM HERE, so the next three steps are guarded. The
+    # `finally` that unlinks it used to start below them, at the `try` around
+    # the render itself, and each of the three can raise: the source copy
+    # (a read-only source directory), `mkdir` (a bad output path), and the
+    # `stem` line's own inputs. Any of them left a `31c-marp-*.css` in the
+    # shared temp directory with nothing holding a reference to it.
+    # `tmp_source_path` is created inside this block and removed by the block
+    # below once it exists, so it is bound to None first: an exception before
+    # the assignment must not turn into a NameError in the handler.
+    tmp_source_path = None
+    try:
+        # Write temp source (never mutate original). Place it next to the
+        # original so relative image paths (e.g. `![bg](_assets/foo.png)`)
+        # resolve from the same directory as the source MD.
+        tmp_source = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", prefix=f".{source.stem}.marp-src-",
+            dir=str(source.parent),
+            delete=False, encoding="utf-8"
+        )
+        tmp_source.write(source_text)
+        tmp_source.close()
+        tmp_source_path = Path(tmp_source.name)
 
-    out_dir = output_dir or source.parent
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stem = output_stem or source.stem
+        out_dir = output_dir or source.parent
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stem = output_stem or source.stem
+    except BaseException:
+        # Re-raised, never swallowed: the caller's contract is unchanged and
+        # this clause exists only so the scratch does not outlive the failure.
+        theme_path.unlink(missing_ok=True)
+        if tmp_source_path is not None:
+            tmp_source_path.unlink(missing_ok=True)
+        raise
 
     outputs = []
     errors = []

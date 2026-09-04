@@ -1,0 +1,6 @@
+{
+  "surviving_unmanaged_entries": 0,
+  "measured": "2026-09-04",
+  "shape": "pytest -n auto -m \"not acceptance\", the shape the suite is actually run in",
+  "note": "Shrink-only, same contract as config/overlay-reachability-baseline.json. Counts entries THIS interpreter created outside /tmp/pytest-of-<user> and did not remove, attributed to the test that created them by the wrappers in tests/tmp_leak_guard.py. It is NOT the /tmp before/after diff, which the same report prints as an unattributable observation: other processes on this machine write /tmp too, so a subtraction over a live tree can never say a test did it. Raising this number is a deliberate act; if it flaps, find the leaking test named in the report rather than raising it."
+}

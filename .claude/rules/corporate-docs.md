@@ -1,12 +1,19 @@
-<!-- version: 1.0.0 | last-updated: 2026-04-21 -->
+<!-- version: 2.0.0 | last-updated: 2026-09-04 -->
 # Corporate Document Guardrail
 
-Last Updated: 2026-04-21
-Last Verified: 2026-06-08
+Last Updated: 2026-09-04
+Last Verified: 2026-09-04
 
-Always-active rule governing five external-facing document types. When any executive requests one of these types, the correct 31C-branded skill is applied automatically - the executive never has to ask for branding, tone, or format.
+Always-active rule governing five external-facing document types. When any
+executive requests one of these, the correct 31C-branded skill is applied
+automatically - they never have to ask for branding, tone or format. Resident
+because it fires on a MESSAGE, which no path can trigger on.
 
-Consolidated reference: `reference/corporate-style-guide.md` (read first before drafting any of the five types).
+Everything that fires only AFTER a doctype is chosen - brand enforcement, the
+rendering pipeline, output naming, classification, change control - is in the
+path-scoped `.claude/rules/corporate-docs-authoring.md`, which loads when a skill
+opens `reference/corporate-style-guide.md` (as this rule requires it to) or
+touches the renderer, the templates or `outputs/documents/`.
 
 ## In-Scope Document Types
 
@@ -18,128 +25,39 @@ Consolidated reference: `reference/corporate-style-guide.md` (read first before 
 | 4 | Official Document (resolution, formal notice, position letter) | `/official-doc` | PDF + DOCX |
 | 5 | OnePager (xPager) | `/xpager` | PDF + HTML |
 
-## Out of Scope
-
-Internal Tribe messages, LinkedIn posts, press releases, marketing collateral. These have dedicated skills (`/tribe-message`, `/linkedin-post`, etc.) and do not use the five locked templates.
+**Out of scope:** internal Tribe messages, LinkedIn posts, press releases,
+marketing collateral. These have dedicated skills (`/tribe-message`,
+`/linkedin-post`) and do not use the five locked templates.
 
 ## Trigger Protocol
 
-When a user message matches any of the patterns below, auto-select the corresponding skill, announce the selection, and apply the locked template. The executive does not need to name the template.
+When a message matches one of the five, auto-select the skill, announce the
+selection, and apply the locked template. The executive does not need to name it.
 
-### Classifier Signals
+**Classifier signals.** The per-doctype trigger phrases are the five skills' rows
+in the always-on registry of `.claude/rules/skill-router.md`, generated from
+their own `x-heading-routing.triggers`. They are deliberately not restated here:
+a second hand-maintained copy of the same phrases in a second always-on rule is
+paid for on every session and drifts from the generated one the first time a
+skill is re-scoped.
 
-| If the message contains... | Select |
-|---|---|
-| "letter to", "write to [named recipient]", "formal letter", "letter of [interest\|introduction\|thanks]" | `/corporate-letter` |
-| "proposal", "commercial proposal", "partnership proposal" (commercial structure), "sales proposal", "offer" | `/proposal` |
-| "MOU", "LOI", "memorandum of understanding", "letter of intent", "term sheet", "partnership agreement", "partnership document" | `/partnership-doc` |
-| "board resolution", "formal notice", "letter of position", "certificate", "official document", "official letter" | `/official-doc` |
-| "xPager", "x-pager", "onepager", "one-pager", "1-pager", "product one-pager", "capability sheet" | `/xpager` |
+**Ambiguity resolution.** If the message spans two categories ("partnership
+proposal" could be commercial `/proposal` or legal `/partnership-doc`): look for
+structural signals first - legal/MOU/LOI/term sheet goes to `/partnership-doc`,
+commercial pricing/module activation goes to `/proposal`. If still ambiguous, ask
+one targeted question: "Commercial proposal with pricing and modules, or MOU/LOI
+defining mutual obligations?"
 
-### Ambiguity Resolution
+**Silent fall-through is forbidden.** If a request unambiguously falls into one
+of the five types, Claude MUST announce the selection in the first response line:
+`Using /{skill} (external letter template). Confidentiality footer applied, GT
+Standard typography, 31C letterhead.` Announcement is non-negotiable - it gives
+the executive an audit trail of what template is being applied.
 
-If the message spans two categories (e.g., "partnership proposal" could be commercial `/proposal` or legal `/partnership-doc`):
-
-1. Look for structural signals. Legal/MOU/LOI/term sheet -> `/partnership-doc`. Commercial pricing/module activation -> `/proposal`.
-2. If still ambiguous, ask one targeted question: "Commercial proposal with pricing and modules, or MOU/LOI defining mutual obligations?"
-
-### Silent Fall-Through Is Forbidden
-
-If a request unambiguously falls into one of the five types, Claude MUST announce the selection in the first response line: `Using /{skill} (external letter template). Confidentiality footer applied, GT Standard typography, 31C letterhead.` Announcement is non-negotiable - it gives the executive an audit trail of what template is being applied.
-
-## Brand Enforcement (applies to all five types)
-
-This section listed six files as one obligation until 2026-09-02, and four of the
-six could never be violated. They are two different things and are now written as
-two.
-
-**Already in context; nothing to load.** `.claude/rules/terminology.md` (Tribe,
-ODUN.ONE, DPI+, Five Principles), `.claude/rules/voice.md` (writing rules),
-`.claude/rules/voss.md` (negotiation overlay) and `.claude/rules/hidden-chars.md`
-(zero invisible characters) carry no `paths:` frontmatter, which in this
-workspace means always-on: they load every session whatever any skill does. A
-skill cannot fail to load them, so listing them as a per-skill duty was
-unfalsifiable, and it made a six-item list read as enforced when two items were.
-
-**Read before drafting.** These are on-demand, so a skill that does not open them
-has not read them:
-
-1. `reference/corporate-style-guide.md` - locked colors, typography, letterhead,
-   signature, footer, file naming, authoring checklist. Engine content, present
-   in every clone, and all five skills name it. Required, no exceptions.
-2. `reference/misha-voice.md`, or the sender's own executive voice file. It
-   routes `private`, so it ships in the operator's data overlay and an engine
-   clone without an overlay does not have it. When it is absent, continue on
-   `.claude/rules/voice.md`, which is always-on and carries the writing rules,
-   and say in the delivery that the voice file was unavailable. Never hold a
-   document for it, and never reconstruct its content from memory.
-
-After drafting, every skill runs:
-
-- `python scripts/sanitize-text.py {path} --scan` on the generated HTML/MD
-- Authoring checklist from `reference/corporate-style-guide.md` for that doctype
-
-Before declaring complete, the skill must carry the confirmation line defined in
-`.claude/rules/hidden-chars.md`, with both numbers copied from
-`scripts/sanitize-text.py --scan` — including when the scan was not clean.
-
-## Rendering Pipeline
-
-All five types render through one script: `scripts/render-doctype.py`.
-
-```
-python scripts/render-doctype.py --type {letter|proposal|partnership|official|xpager} \
-  --data path/to/data.json --out outputs/documents/{sender}/ \
-  --formats {pdf,docx|pdf,html}
-```
-
-The renderer:
-
-1. Loads the locked HTML template from `datastore/brand/templates/doctypes/{type}.html`.
-2. Substitutes placeholders from the JSON data file.
-3. Embeds logos, fonts, brand CSS inline (self-contained output).
-4. Renders PDF via Playwright (`scripts/html-to-pdf.py`).
-5. For types needing DOCX (letter, proposal, partnership, official), also renders DOCX via python-docx using the brand master template.
-6. For xpager, also saves the HTML alongside the PDF.
-7. Returns the output file paths.
-
-## Authoring Outputs Location
-
-Rendered documents land in `outputs/documents/{sender-slug}/{doctype}/` using the locked file naming convention:
-
-`YYYY-MM-DD_{doctype}_{recipient-slug}_{short-subject-slug}.{ext}`
-
-Senders without an explicit slug default to `misha-hanin`.
-
-## Classification
-
-Resolved by `get_routing_destination()` over `config/routing-map.yaml`, the single
-classification input (`.claude/rules/classification.md`). Called on 2026-08-31:
-
-- `reference/corporate-style-guide.md` - engine.
-- `.claude/rules/corporate-docs.md` - engine.
-- `scripts/render-doctype.py` - engine.
-- `.claude/skills/corporate-letter/` - engine.
-- `.claude/skills/proposal/` - engine.
-- `.claude/skills/partnership-doc/` - engine.
-- `.claude/skills/official-doc/` - engine.
-- `.claude/skills/xpager/` - engine.
-- `datastore/brand/templates/doctypes/` - corporate.
-- `outputs/documents/` - private.
-
-Five of those lines read `corporate` until 2026-08-31, one of them crediting
-`reference/` with a `corporate` directory default that has never existed (the
-directory resolves `engine`; the CEO files in it are per-file `private` carve-outs).
-The map's header records why: code directories that were `corporate` (shared down to
-executives) became `engine` (shared to everyone), because code is not data. Only the
-brand templates, which are content, stayed `corporate`.
-
-`engine` is the WIDER destination. The engine repo is public, so the stale text was
-wrong in the dangerous direction: it said a `scripts/` file and four skill
-directories were held back from the public when they already ship in the public
-clone. `tests/test_a_rule_that_classified_its_own_files_by_hand.py` now resolves
-every claim above, so this section cannot drift from the map again unnoticed.
-
-## Change Control
-
-Changes to any locked template require CEO approval. After edit, run `/push-updates` to propagate to all execs.
+**Read `reference/corporate-style-guide.md` before drafting any of the five.**
+Required, no exceptions; opening it is also what loads
+`.claude/rules/corporate-docs-authoring.md` with the rest of the obligations:
+brand enforcement, rendering, output naming, classification, and the change
+control on the locked templates. Change control moved there on 2026-09-04 because
+it fires when someone EDITS a template, and that rule is already path-scoped to
+the template directory, so the edit itself loads it.

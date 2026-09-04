@@ -148,19 +148,31 @@ def test_bad_category_fails(fixture_tree):
     assert any("category" in e for e in errors)
 
 
+# These two fixtures were `router: manual` until 2026-09-04, and the first
+# carried the comment "triggers stay in-core". Since the context diet that is no
+# longer true: a manual row's trigger cell in the ALWAYS-ON core index is
+# replaced by `MANUAL_TRIGGER_CELL`, because a skill no message can route to is
+# owed no matching vocabulary in the layer paid for on every session. Its full
+# triggers survive in the category detail file.
+#
+# So the fixtures are `router: auto`, which is what actually exercises the
+# subject of both tests -- pipe escaping in a TRIGGER cell -- on both layers.
+# `test_a_manual_row_still_escapes_a_pipe_in_its_label` below covers the other
+# half, since a manual row keeps its label and a label can carry pipes too.
+
 def test_pipe_round_trip(fixture_tree):
     skills, router = fixture_tree
     # A raw pipe in a trigger must render escaped and survive a check.
     _write_skill(
         skills, "flagskill",
         "x-heading-routing:\n  category: Operations\n  triggers:\n"
-        "    - 'flags: --mode={a|b|c}'\n  exclusions:\n    - N/A\n  compound: \"No\"\n  router: manual\n",
+        "    - 'flags: --mode={a|b|c}'\n  exclusions:\n    - N/A\n  compound: \"No\"\n  router: auto\n",
     )
     rows, errors = gen.load_routing_rows()
     assert errors == []
     gen.cmd_split_write(rows)
     text = router.read_text(encoding="utf-8")
-    assert r"--mode={a\|b\|c}" in text  # escaped in the core index (triggers stay in-core)
+    assert r"--mode={a\|b\|c}" in text  # escaped in the core index
     # And escaped in the category detail layer (flagskill is Operations).
     detail = (gen.CATEGORY_FILE_DIR / "operations.md").read_text(encoding="utf-8")
     assert r"--mode={a\|b\|c}" in detail
@@ -172,13 +184,54 @@ def test_already_escaped_pipe_not_double_escaped(fixture_tree):
     _write_skill(
         skills, "flagskill",
         "x-heading-routing:\n  category: Operations\n  triggers:\n"
-        "    - 'flags: --mode={a\\|b}'\n  exclusions:\n    - N/A\n  compound: \"No\"\n  router: manual\n",
+        "    - 'flags: --mode={a\\|b}'\n  exclusions:\n    - N/A\n  compound: \"No\"\n  router: auto\n",
     )
     rows, _ = gen.load_routing_rows()
     gen.cmd_split_write(rows)
     text = router.read_text(encoding="utf-8")
     assert r"--mode={a\|b}" in text
     assert r"--mode={a\\|b}" not in text  # no double escaping
+
+
+def test_a_manual_row_keeps_its_label_and_loses_only_its_triggers(fixture_tree):
+    """The always-on saving, asserted in both directions on one row.
+
+    A manual skill's trigger PROSE must not reach the core index (that is the
+    saving), and its LABEL must still reach it escaped (that is what
+    `/scrutinize`'s five flags depend on, and what `test_skill_graph_covers_the_router`
+    parses). The detail file keeps everything.
+    """
+    _write_skill(
+        skills := fixture_tree[0], "manualskill",
+        "x-heading-routing:\n  category: Operations\n  triggers:\n"
+        "    - 'NEVER auto-trigger. distinctive-manual-phrase only.'\n"
+        "  exclusions:\n    - N/A\n  compound: \"No\"\n  router: manual\n"
+        "  label: '/manualskill [a|b]'\n",
+    )
+    assert skills  # the fixture tree is populated; the write above is the subject
+    rows, errors = gen.load_routing_rows()
+    assert errors == []
+    gen.cmd_split_write(rows)
+
+    core = fixture_tree[1].read_text(encoding="utf-8")
+    assert "distinctive-manual-phrase" not in core, (
+        "a manual skill's trigger prose must not be paid for on every session")
+    # Asserted as the RENDERED ROW, not as `MANUAL_TRIGGER_CELL in core`. That
+    # weaker form was what this test carried until 2026-09-04, and it goes
+    # vacuous the moment the constant is shortened: `"" in core` and `"m" in
+    # core` are both true of any registry, so the assertion would keep passing
+    # over a cell that had lost its content entirely. Pinning the whole row ties
+    # the test to the constant's actual value in its actual position.
+    assert f"| `/manualskill [a\\|b]` | {gen.MANUAL_TRIGGER_CELL} |" in core, (
+        "the row, its escaped label and the manual marker must all survive; "
+        "gates parse the registry through the label")
+    assert gen.MANUAL_TRIGGER_CELL.strip(), (
+        "an empty marker makes every assertion that mentions it vacuous")
+
+    detail = (gen.CATEGORY_FILE_DIR / "operations.md").read_text(encoding="utf-8")
+    assert "distinctive-manual-phrase" in detail, (
+        "the on-demand layer must still carry the full trigger text")
+    assert gen.cmd_split_check(rows) == 0
 
 
 _INTEL = ("x-heading-routing:\n  category: Intel\n  triggers:\n    - a\n"

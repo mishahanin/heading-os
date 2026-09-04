@@ -550,7 +550,43 @@ def test_the_constitution_is_still_the_private_overlay_file_this_assumes():
 # always-on rule in a public repository naming an overlay-only file as a hard
 # prerequisite.
 
-CORPORATE_DOCS = ROOT / ".claude" / "rules" / "corporate-docs.md"
+# The brand-enforcement section moved on 2026-09-04, in the context diet that cut
+# the always-on rule set roughly in half. It fires only once a doctype has already
+# been chosen, so it went to the PATH-SCOPED sibling
+# `corporate-docs-authoring.md`, which loads when a skill opens
+# `reference/corporate-style-guide.md` -- the read the always-on guardrail orders
+# it to make. The section is unchanged; only the file holding it moved, so this
+# test follows it rather than being relaxed.
+#
+# Asserted, not assumed: the sibling must exist and must be the path-scoped one.
+# Pointing this constant at a file that had quietly become always-on again would
+# make the whole section resident while this test still passed.
+CORPORATE_DOCS = ROOT / ".claude" / "rules" / "corporate-docs-authoring.md"
+
+
+def test_the_brand_section_lives_in_the_path_scoped_sibling():
+    """The section is on-demand, and the guardrail still points at its trigger.
+
+    Both halves matter. If `corporate-docs-authoring.md` lost its `paths:` block
+    it would be always-on again and the diet would have silently reverted; if the
+    always-on guardrail stopped ordering the style-guide read, nothing would load
+    the sibling and the brand obligations would go unenforced.
+    """
+    assert CORPORATE_DOCS.is_file(), f"missing: {CORPORATE_DOCS}"
+    scoped = CORPORATE_DOCS.read_text(encoding="utf-8")
+    assert scoped.startswith("---\n"), "the sibling must open with frontmatter"
+    front = scoped.split("---", 2)[1]
+    assert "paths:" in front, "the sibling must be path-scoped, not always-on"
+    assert "reference/corporate-style-guide.md" in front, (
+        "the style guide must be one of the globs; it is the read that loads this rule")
+
+    guardrail = (ROOT / ".claude" / "rules" / "corporate-docs.md").read_text(encoding="utf-8")
+    assert "paths:" not in guardrail.split("\n## ", 1)[0], (
+        "the trigger guardrail must stay always-on: it fires on a message, not a path")
+    assert "reference/corporate-style-guide.md" in guardrail, (
+        "the always-on guardrail must still order the read that loads the sibling")
+    assert "corporate-docs-authoring.md" in guardrail, (
+        "the always-on guardrail must name where the rest of the obligations went")
 
 DOCTYPE_SKILLS = (
     "corporate-letter", "proposal", "partnership-doc", "official-doc", "xpager",

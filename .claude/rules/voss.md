@@ -16,20 +16,14 @@ When drafting any communication on Misha's behalf:
 - **Precise numbers.** Never use round numbers in pricing, timelines, or terms. $347,850 not $350,000. 17 days not "a couple weeks."
 - **Never split the difference.** Compromise is lazy. Find creative solutions that give both sides what they actually need.
 
-## When Preparing for Meetings or Calls
+## The two playbooks
 
-Before any meeting prep, consider:
-- What's the counterpart's likely negotiator type? (Analyst / Accommodator / Assertive)
-- What accusation audit items should be addressed early?
-- What 3 calibrated questions should Misha have ready?
-- What Black Swans might be hiding?
+Both are on demand, because both fire on an event you already know you are in.
 
-## When Facing Resistance
-
-Deploy in this order:
-1. Label the emotion ("It seems like this is a concern...")
-2. Ask a calibrated question ("What would need to change?")
-3. Mirror their key words and pause
-4. Summarize toward "That's Right"
+- **Preparing a meeting or call** (counterpart negotiator type, accusation-audit
+  items, three calibrated questions, hidden Black Swans) — `/meeting-prep` and
+  `/voss` run it; the checklist is in `reference/voss-negotiation.md`.
+- **Facing resistance**, in this order: label the emotion, ask a calibrated
+  question, mirror their key words and pause, summarize toward "That's Right".
 
 Full framework: `reference/voss-negotiation.md`

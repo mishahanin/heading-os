@@ -5,10 +5,17 @@ The registry is a build artifact. Each skill owns its router row in its own SKIL
 frontmatter under ``x-heading-routing`` (category, triggers[], exclusions[], compound,
 router, optional label). This script renders those rows into a two-layer split (F-5.2):
 
-  1. A compact core index (Skill + Triggers only) between the sentinel markers in the
-     always-active ``.claude/rules/skill-router.md`` -- enough for first-pass routing.
+  1. A compact core index between the sentinel markers in the always-active
+     ``.claude/rules/skill-router.md`` -- enough for first-pass routing and no more.
+     It carries Skill + Triggers for the ``router: auto`` skills ONLY, minus any
+     trigger that merely repeats the skill's own name. The ``router: manual``
+     skills keep a ROW (several gates parse the registry through it) but their
+     trigger cell is reduced to ``MANUAL_TRIGGER_CELL``, because no message can
+     route to them and they are owed no matching vocabulary in the layer that is
+     paid for on every session.
   2. Per-category detail files ``reference/skill-router/<category>.md`` carrying the full
-     Skill | Triggers | Exclusions | Compound table -- read on demand for disambiguation.
+     Skill | Triggers | Exclusions | Compound table for EVERY skill, auto and manual
+     alike -- read on demand for disambiguation.
 
 Everything outside the markers (protocol header, corporate-docs guardrail, compound-
 workflow section, plugin notes, ...) is preserved unchanged, LINE ENDINGS ASIDE:
@@ -74,6 +81,40 @@ TABLE_SEP = "|---|---|---|---|"
 # Compound move to the per-category detail files.
 CORE_TABLE_HEADER = "| Skill | Triggers |"
 CORE_TABLE_SEP = "|---|---|"
+
+# The Triggers cell of a `router: manual` row in the ALWAYS-ON core index.
+#
+# A manual skill cannot be reached by matching a natural-language message, so
+# every byte of trigger text on its row is spent telling the model not to do
+# something it cannot do. Measured 2026-09-04: the 23 manual skills spent 3868
+# bytes of the core index on exactly that, `/checkpoint` alone spending 1072 to
+# describe three session switches -- inside a rule whose entire job is matching.
+#
+# What actually stops them being matched is not that prose. 22 of the 23 carry
+# `disable-model-invocation: true`, which the HARNESS enforces: the model cannot
+# invoke them from natural language at all. The 23rd is `brain-audit`, which
+# omits the flag deliberately so composing skills can reach it through the Skill
+# tool, and which is invoked by a skill rather than by a user message either way.
+# So the prose is redundant with a mechanical control, and the full row -- with
+# the reason, the flags and the argument grammar -- survives in
+# `reference/skill-router/<category>.md`, read on demand.
+#
+# The cell was "Explicit invocation only; never auto-routed." until 2026-09-04,
+# which is a 44-character sentence repeated verbatim on 23 rows: 1012 bytes of an
+# always-on file spent saying one thing 23 times. It says it once now, in the
+# rule's prose above the registry, and the cell carries the one word that lets a
+# human reading the table tell "cannot be matched" from "nobody wrote triggers
+# yet". Emptying it entirely would save 138 bytes more and lose that distinction.
+#
+# Nothing parses this value. VERIFIED 2026-09-04 across tests/, scripts/,
+# .claude/hooks/, .claude/skills/, .github/ and docs/: the `NEVER auto-trigger`
+# string that IS load-bearing (`scripts/dev/extract-router-rows.py`, and the
+# advisory warning below) is read from SKILL.md frontmatter and from the
+# per-category detail files, never from this core cell. The gates that read the
+# core index -- `test_skill_graph_covers_the_router`,
+# `test_three_flag_lists_that_described_one_skill`,
+# `workspace-health.py::check_skill_router_coverage` -- all parse the LABEL.
+MANUAL_TRIGGER_CELL = "manual"
 
 FIX_IT_SNIPPET = """\
 x-heading-routing:
@@ -524,10 +565,54 @@ def category_slug(category: str) -> str:
     return category.lower()
 
 
+def _normalise_token(text: str) -> str:
+    """Lowercase and strip every non-alphanumeric, for trigger-vs-label comparison."""
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def core_triggers(row: dict) -> list[str]:
+    """The triggers worth spending always-on bytes on, for one auto-routable skill.
+
+    Drops a trigger that is EXACTLY the skill's own name or its rendered label,
+    modulo case and punctuation -- `/viraid` listing "viraid", `/mullvad` listing
+    "/mullvad", `/telegram` listing "telegram". The Skill cell of the same row
+    already spells it, so the duplicate buys no match and costs bytes in the one
+    layer that is paid for on every session.
+
+    EXACT match only, and the narrowness is the point. Dropping every trigger that
+    merely CONTAINS the name was measured on 2026-09-04 and saved 1587 bytes by
+    deleting real matching surface: `/thread` fell from 8 triggers to 1, losing
+    "open a thread", "close thread", "thread list" and "thread find" -- distinct
+    phrases a user actually types -- and `/design` kept only "design social" while
+    "design infographic", "design mockup" and "design logo" went. A containment
+    rule cannot tell a redundant echo from a compound phrase built on the name.
+    The exact rule saves less and loses nothing.
+
+    Never returns empty: a skill whose only trigger is its own name keeps it, so
+    the row still shows what the model is matching against.
+    """
+    label_key = _normalise_token(row["label"])
+    name_key = _normalise_token(row["name"])
+    kept = [
+        t for t in row["triggers"]
+        if _normalise_token(t) not in (label_key, name_key)
+    ]
+    return kept or row["triggers"][:1]
+
+
 def render_core_row(row: dict) -> str:
-    """Compact 2-column core-index row: backtick label + full triggers only."""
+    """Compact 2-column core-index row: backtick label + first-pass triggers.
+
+    A `router: manual` row gets MANUAL_TRIGGER_CELL instead of its triggers. The
+    row itself stays -- gates read it, and an operator should find the command
+    listed -- but the cell does not, because a skill that cannot be reached by
+    matching a message is owed no matching vocabulary in the layer that is paid
+    for on every session.
+    """
     label = escape_pipes(row["label"])
-    triggers = escape_pipes(TRIGGER_SEP.join(row["triggers"]))
+    if row["router"] == "manual":
+        return f"| `{label}` | {MANUAL_TRIGGER_CELL} |"
+    triggers = escape_pipes(TRIGGER_SEP.join(core_triggers(row)))
     return f"| `{label}` | {triggers} |"
 
 
@@ -535,10 +620,19 @@ def render_core_index(rows: list[dict]) -> str:
     """Render the compact always-on core index (the content between the markers).
 
     Per category: a heading, a pointer to the detail file, and a 2-column
-    Skill|Triggers table (full triggers, for first-pass matching). Exclusions and
-    compound patterns live in the detail file, read on demand. Deterministic order:
-    fixed category order, then skill name ascending. Blocks separated by a blank
-    line; no trailing newline (matches splice_region's contract).
+    Skill|Triggers table. Exclusions and compound patterns live in the category
+    file, read on demand. Deterministic order: fixed category order, then skill
+    name ascending. Blocks separated by a blank line; no trailing newline
+    (matches splice_region's contract).
+
+    Every skill keeps a ROW, including the `router: manual` ones. Their rows are
+    what several gates read the registry FOR -- `test_skill_graph_covers_the_router`
+    asserts two-way set equality between the ``| `/name`` rows here and
+    `reference/skill-graph.csv`, `test_three_flag_lists_that_described_one_skill`
+    reads `/scrutinize`'s flag-bearing label out of this table, and
+    `workspace-health.py::check_skill_router_coverage` requires every skill
+    directory to be named here. What a manual skill does NOT keep is its trigger
+    PROSE: see MANUAL_TRIGGER_CELL.
     """
     blocks: list[str] = []
     for category in CATEGORY_ORDER:
@@ -546,11 +640,14 @@ def render_core_index(rows: list[dict]) -> str:
             (r for r in rows if r["category"] == category), key=lambda r: r["name"]
         )
         slug = category_slug(category)
+        # The pointer says only where the detail is; WHAT is in it, and that
+        # reading it is mandatory before selecting, is stated once in the rule's
+        # prose above the registry. Spelling that out per category cost 108 bytes
+        # seven times over in an always-on file to repeat one sentence.
         lines = [
             f"### {category}",
             "",
-            f"Full triggers, exclusions, and compound patterns: "
-            f"`reference/skill-router/{slug}.md`",
+            f"Detail: `reference/skill-router/{slug}.md`",
             "",
             CORE_TABLE_HEADER,
             CORE_TABLE_SEP,

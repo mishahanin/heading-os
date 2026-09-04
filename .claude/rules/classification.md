@@ -1,7 +1,30 @@
-<!-- version: 2.1.0 | last-updated: 2026-08-20 -->
+---
+paths:
+  - "context/**"
+  - "reference/**"
+  - "knowledge/**"
+  - "datastore/**"
+  - "config/routing-map.yaml"
+---
+<!-- version: 3.0.0 | last-updated: 2026-09-04 -->
+
 # Record Classification Policy
 
-Last Verified: 2026-08-20
+Last Verified: 2026-09-04
+
+Path-scoped since 2026-09-04. The obligation below fires on a FILE PATH — "I am
+creating something under `context/`" — which is the one signal the harness can
+match mechanically, so this rule loads when a tool call names one of the four
+ask-directories or the routing map it tells you to edit, and costs nothing on the
+sessions that never touch them.
+
+Two limits, stated rather than left to be found. The match is on a tool's
+`file_path` argument, so a file created through `Bash` (a heredoc, a `cp`) does
+not load this rule. And a path outside the globs above gets no prompt to
+classify — it takes the `engine` default. Neither is a hole in the engine/data
+seam: `scripts/leak-guard.py`, `scripts/utils/engine_guard.py` and the
+unbypassable content scan in `scripts/push-all.py` refuse private content at the
+push, whatever this rule did or did not do at the keyboard.
 
 Every workspace record resolves to one of three **routing destinations** (HEADING OS
 engine/data separation):

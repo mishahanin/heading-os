@@ -35,7 +35,7 @@ def test_the_suite_writes_its_denials_somewhere_of_its_own():
     )
 
 
-def test_the_suite_does_not_spend_the_operators_daily_write_allowance():
+def test_the_suite_does_not_spend_the_operators_daily_write_allowance(tmp_path):
     """The same defect as this file's first test, one guard along.
 
     `check_rate_limit` in `.claude/hooks/_dispatch.py` counts Write and Edit
@@ -56,75 +56,111 @@ def test_the_suite_does_not_spend_the_operators_daily_write_allowance():
     constant: the redirection has to survive the subprocess, and a test that
     only checked the environment variable would pass against a hook that reads
     it and ignores it.
+
+    **Two hook calls, and the second one is why.** Until 2026-09-04 one call did
+    both jaws, and jaw two looked for its marker in the file the WHOLE run
+    shares. That marker lives in `recent`, which `check_rate_limit` truncates to
+    the last `RATE_LIMIT_LOOP_WINDOW` entries — twenty. Under `-n auto` every
+    worker drives this hook, so twenty foreign writes arriving between this
+    test's write and its read evict the marker and the test fails over work it
+    did not do. MEASURED 2026-09-04, twenty-one sequential Write payloads
+    against one state file: the first marker is gone and `len(recent)` is 20.
+
+    That is a second mechanism, on top of the one the same 2026-09-04 fix
+    closed: overlapping hook processes were also LOSING each other's updates
+    outright, because the load-modify-save in `check_rate_limit` was not
+    serialised (`tests/test_a_runaway_loop_guard_that_lost_the_events_it_counted.py`).
+    The lock fixes the losing. Nothing fixes the eviction, because the eviction
+    is the guard working as designed — so the assertion moved off the shared
+    file instead.
+
+    Jaw one still drives the hook with the environment the suite actually runs
+    under, which is the property being guarded. Jaw two drives it a second time
+    against a private file, where no other worker can reach the answer.
     """
     engine_root = Path(__file__).resolve().parent.parent
     production = engine_root / ".claude" / "state" / "dispatch-rate.json"
-
-    # A marker unique to THIS call, never a whole-file comparison. Until
-    # 2026-09-01 this test read the production file before and after and
-    # asserted the two strings equal. That file is live shared state: its
-    # `recent` list holds the last 20 tool calls and `tool_history` around four
-    # hundred, and BOTH grow on every Write, Edit and Bash the operator's own
-    # session makes. So any concurrent work between the two reads failed the
-    # test over a change the test did not cause.
-    #
-    # MEASURED that day. Under five concurrent fix agents the full suite came
-    # back `1 failed, 20292 passed`, this being the one, with a diff whose
-    # differing region was the counter and the recent-writes list. Run alone,
-    # immediately afterwards and against the same code, it passed three times
-    # out of three. Nothing about the hook changed between those runs.
-    #
-    # A flaky guard is worse than a missing one: it teaches its reader that red
-    # here means "somebody was busy", and this guard's real failure looks
-    # exactly the same. The sibling test one function below already had the
-    # right technique, and said so in its own first line: assert on a marker
-    # unique to this call, never on the whole-file total.
-    marker = f"rate-isolation-probe-{uuid.uuid4().hex}.txt"
-    probe_path = engine_root / "outputs" / "scratch" / marker
-
-    payload = {
-        "tool_name": "Write",
-        "tool_input": {
-            "file_path": str(probe_path),
-            "content": "a write the operator did not make",
-        },
-    }
+    hook = engine_root / ".claude" / "hooks" / "_dispatch.py"
     runner = (
         "import sys, runpy; sys.argv = [sys.argv[1]]; "
         "runpy.run_path(sys.argv[0], run_name='__main__')"
     )
-    proc = subprocess.run(
-        [sys.executable, "-c", runner, str(engine_root / ".claude" / "hooks" / "_dispatch.py")],
-        input=json.dumps(payload), capture_output=True, text=True,
-        cwd=str(engine_root), env=dict(os.environ), timeout=120,
-    )
-    assert proc.returncode == 0, f"the hook exited {proc.returncode}: {proc.stderr}"
 
-    # Jaw one, the negative: the operator's real ledger never heard of us.
+    def drive(marker: str, env: dict) -> None:
+        # A marker unique to THIS call, never a whole-file comparison. Until
+        # 2026-09-01 this test read the production file before and after and
+        # asserted the two strings equal. That file is live shared state: its
+        # `recent` list holds the last 20 tool calls and `tool_history` around
+        # four hundred, and BOTH grow on every Write, Edit and Bash the
+        # operator's own session makes. So any concurrent work between the two
+        # reads failed the test over a change the test did not cause.
+        #
+        # MEASURED that day. Under five concurrent fix agents the full suite
+        # came back `1 failed, 20292 passed`, this being the one, with a diff
+        # whose differing region was the counter and the recent-writes list. Run
+        # alone, immediately afterwards and against the same code, it passed
+        # three times out of three. Nothing about the hook changed between those
+        # runs.
+        #
+        # A flaky guard is worse than a missing one: it teaches its reader that
+        # red here means "somebody was busy", and this guard's real failure
+        # looks exactly the same.
+        payload = {
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": str(engine_root / "outputs" / "scratch" / marker),
+                "content": "a write the operator did not make",
+            },
+        }
+        proc = subprocess.run(
+            [sys.executable, "-c", runner, str(hook)],
+            input=json.dumps(payload), capture_output=True, text=True,
+            cwd=str(engine_root), env=env, timeout=120,
+        )
+        assert proc.returncode == 0, f"the hook exited {proc.returncode}: {proc.stderr}"
+
+    # Jaw one, the negative: driven under the suite's own environment, the
+    # operator's real ledger never hears of us. Absence from a whole file is
+    # true no matter what any other worker does to that file.
+    inherited = f"rate-isolation-probe-{uuid.uuid4().hex}.txt"
+    drive(inherited, dict(os.environ))
+
     produced = production.read_text(encoding="utf-8") if production.is_file() else ""
-    assert marker not in produced, (
+    assert inherited not in produced, (
         "a hook call made by the test suite landed in the operator's real "
         "dispatch-rate ledger; the suite is spending an allowance it did not "
         "earn and is filling the runaway-loop guard with writes nobody made"
     )
 
-    # Jaw two, the positive: it landed in the suite's own file instead. Without
-    # this the test passes against a hook that counts NOWHERE at all, which
-    # would be the rate limit silently switched off rather than redirected.
     redirected = os.environ.get("WS_RATE_LIMIT_STATE")
     assert redirected, (
         "WS_RATE_LIMIT_STATE is unset during the run, so the isolation in "
         "tests/conftest.py is gone"
     )
-    sandbox = Path(redirected)
-    assert sandbox.is_file(), (
-        f"the redirected rate-limit state {sandbox} was never written, so the "
-        f"hook counted this write nowhere and the guard is off, not isolated")
-    assert marker in sandbox.read_text(encoding="utf-8"), (
+    assert Path(redirected) != production, (
+        "WS_RATE_LIMIT_STATE points at the operator's own ledger, so the "
+        "redirection is a redirection to nowhere"
+    )
+
+    # Jaw two, the positive: the hook DOES count, and it counts where the
+    # variable sends it. Without this the test passes against a hook that counts
+    # NOWHERE at all, which would be the rate limit silently switched off rather
+    # than redirected. Against a private file, so neither an eviction nor
+    # another worker can decide the answer.
+    private_state = tmp_path / "dispatch-rate.json"
+    private = f"rate-isolation-probe-{uuid.uuid4().hex}.txt"
+    drive(private, dict(os.environ, WS_RATE_LIMIT_STATE=str(private_state)))
+
+    assert private_state.is_file(), (
+        f"the redirected rate-limit state {private_state} was never written, so "
+        f"the hook counted this write nowhere and the guard is off, not "
+        f"isolated")
+    assert private in private_state.read_text(encoding="utf-8"), (
         f"the probe write is in neither ledger. It is absent from the "
         f"operator's file, which is what this test wants, but it is also "
-        f"absent from the suite's own {sandbox.name}, so nothing counted it "
-        f"and this test would pass against a rate limit that does not run.")
+        f"absent from the {private_state.name} the variable named, so nothing "
+        f"counted it and this test would pass against a rate limit that does "
+        f"not run.")
 
 
 def test_a_denial_written_during_the_suite_lands_in_the_suite_directory():

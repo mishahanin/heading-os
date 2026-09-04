@@ -1715,19 +1715,27 @@ def check_slow_shell(payload: dict) -> dict | None:
 # only be stopped by Claude's own context window. This check catches the pattern
 # at the hook layer with file-based daily counters.
 #
-# State file is best-effort, and the honest size of "best-effort" is bigger than
-# this comment used to claim. It read "may race and miscount by a few", which is
-# the arithmetic of two callers. `actor_id` below records the real rate: 36 hook
-# calls in 25 seconds across six actors. An unlocked load-modify-save at that
-# rate loses whole updates, not a few, and per-pid staging fixes tearing rather
-# than lost updates. So the counter UNDER-counts hardest exactly when fan-out is
-# heaviest, which is the runaway case the cap exists to catch.
+# The state file was best-effort until 2026-09-04, and the honest size of
+# "best-effort" was bigger than this comment claimed twice over. It first read
+# "may race and miscount by a few", which is the arithmetic of two callers.
+# `actor_id` below records the real rate: 36 hook calls in 25 seconds across six
+# actors. Then it said the lock was "the fix if the cap is ever relied on for an
+# exact number, and it is not today", which weighed the wrong cost — the cap is
+# not relied on for an exact number, but its error is not random either.
 #
-# Not a new defect and not silently narrowed: this is the claim corrected to what
-# the method establishes, per `.claude/rules/scope-claims.md`. The cap still
-# catches a sustained runaway, because a loop that trips it does so over minutes
-# rather than in one 25-second burst. A lock here is the fix if the cap is ever
-# relied on for an exact number, and it is not today.
+# MEASURED 2026-09-04, sixteen hook processes fanned out at once against one
+# state file, the shape `pytest -n auto` produces. Fifteen trials, 240 hook
+# calls, 70 of which left no trace at all: 29%, and `count` equalled the number
+# of survivors exactly in every trial. Per-pid staging had fixed TEARING; the
+# read and the write that follows it were still not one step, so whichever
+# process replaced second erased the other's entry and its increment. Updates
+# are lost in proportion to how many tool calls OVERLAP — which is precisely the
+# condition a runaway loop produces. The guard undercounted hardest in the case
+# it exists to catch.
+#
+# `_rate_state_lock` below closes it, for this check and for `check_tool_budget`,
+# which shares the same file. Guard:
+# `tests/test_a_runaway_loop_guard_that_lost_the_events_it_counted.py`.
 
 import time
 from datetime import datetime
@@ -1827,6 +1835,99 @@ def _save_rate_state(state: dict) -> None:
                   file=sys.stderr)
 
 
+# Two seconds, matching `file_lock`'s own default and for the same reason: this
+# runs inside a hook the harness is waiting on. The critical section it covers is
+# one small read and one small write, so legitimate contention is resolved in
+# microseconds and this bound is never reached by honest traffic. MEASURED
+# 2026-09-04 on an idle machine: sixteen hook processes fanned out at once
+# finish in 433-547 ms of wall clock end to end, subprocess startup included,
+# and across five such trials none of the 160 acquisitions reached this bound
+# (each process takes it twice, once per check). Two seconds means something is
+# wrong rather than busy.
+RATE_LOCK_WAIT_SECONDS = 2.0
+
+
+def _rate_lock_path() -> Path:
+    """The sidecar `<state file>.lock`, resolved at CALL time.
+
+    A sidecar rather than the state file itself, because `_save_rate_state`
+    promotes a staging file with `os.replace`: a lock taken on the state file
+    holds an INODE, and after the first save that inode is no longer the file
+    anyone reads. The sidecar is never replaced, so its identity is stable for as
+    long as the state file has a name. Not the DIRECTORY either — `.claude/state/`
+    is shared with the checkpoint store and the graph-first markers, and locking
+    it would serialise writers that have nothing to do with each other.
+
+    Read from the module global on every call rather than frozen beside
+    `RATE_LIMIT_STATE_FILE`, because three existing test modules move that
+    constant with `monkeypatch.setattr` after import. A lock path frozen at
+    import would keep guarding the file the module was imported with, which is
+    the one file the caller is no longer using.
+    """
+    return RATE_LIMIT_STATE_FILE.with_name(RATE_LIMIT_STATE_FILE.name + ".lock")
+
+
+@contextlib.contextmanager
+def _rate_state_lock():
+    """Serialise one whole read-modify-write of the rate-limit state file.
+
+    `_save_rate_state` makes each WRITE indivisible. That is a different
+    guarantee from making a read and the write that follows it indivisible, and
+    the comment above `check_rate_limit` used to say the gap cost "a few"
+    updates. It cost whole ones. MEASURED 2026-09-04, sixteen hook processes at
+    once against one state file: over fifteen trials, 240 hook calls, 70 of
+    them left no trace at all, and `count` equalled the number of survivors
+    exactly in every trial. Twenty-nine per cent, ranging from 6% to 44% of a
+    trial. The same probe after this lock: 400 calls, none lost.
+
+    The direction of that error is what makes it a defect rather than a rounding
+    error. Updates are lost in proportion to how many tool calls OVERLAP, and
+    overlap is the condition a runaway loop produces, so the daily cap
+    undercounted hardest in the case it exists to catch.
+
+    `checkpoint_paths.file_lock` rather than a fourth `flock` here: it is this
+    workspace's one exclusive-lock primitive, already used by five other hooks,
+    and a local copy is the one that stops being fixed. Imported inside the
+    function, not at module scope, because this hook runs on every tool call and
+    the module costs 5-11 ms to import; the first call pays it and `sys.modules`
+    serves the second.
+
+    MEASURED 2026-09-04 on an idle machine, three interleaved A/B rounds of 40
+    sequential hook calls each: median 177 ms before, 183 ms after. The 6 ms is
+    the import, and it is smaller than the 16 ms spread between the unchanged
+    code's own three medians, so it does not resolve against run-to-run noise.
+    Under the 16-way fan-out this lock exists for, two rounds: 416 and 371 ms
+    per call before, 451 and 374 ms after. The poll interval does not dominate
+    because the critical section is one read and one write.
+
+    **It is bounded, and on expiry it counts UNLOCKED.** A hook that waits
+    without a bound wedges the tool call it is inspecting, and this counter is
+    telemetry with a cap on it rather than an authorisation boundary: a lock file
+    that could not be taken would otherwise block every Write in the workspace,
+    which is a much worse failure than an undercount. So the fail-open direction
+    is deliberate, and it degrades to exactly the behaviour this check had
+    before the lock existed. `file_lock` prints a line to stderr when that
+    happens, because a silent degradation is how an unserialised counter
+    survives another year.
+
+    Where `fcntl` is unavailable (Windows) the same applies and nothing raises:
+    `file_lock` yields False and the block runs. This file has a cross-platform
+    history and the degradation is explicit rather than an ImportError at the
+    top of a PreToolUse wall.
+    """
+    try:
+        from scripts.utils.checkpoint_paths import file_lock
+    except Exception as e:  # noqa: BLE001 - a hook must not break the tool call
+        print(f"[_dispatch:rate_limit] no lock primitive ({e}); counting unlocked",
+              file=sys.stderr)
+        yield False
+        return
+
+    with file_lock(_rate_lock_path(), wait=RATE_LOCK_WAIT_SECONDS,
+                   label="_dispatch:rate_limit") as held:
+        yield held
+
+
 def check_rate_limit(payload: dict) -> dict | None:
     """Daily Write/Edit cap + runaway-loop detection.
 
@@ -1846,20 +1947,24 @@ def check_rate_limit(payload: dict) -> dict | None:
     tool_input = payload.get("tool_input", {}) or {}
     file_path = tool_input.get("file_path", "") or tool_input.get("notebook_path", "")
 
-    state = _load_rate_state()
-    today = datetime.now().astimezone().strftime("%Y-%m-%d")
-    if state.get("date") != today:
-        # Reset only the keys THIS check owns. Rebinding `state` to a fresh
-        # three-key literal also dropped `tool_history`, which check_tool_budget
-        # owns and which is a rolling 30-minute window, not a daily one. The
-        # first write after local midnight therefore emptied that window, so a
-        # runaway loop straddling midnight restarted its count at 1 and neither
-        # the soft nor the hard tool cap could fire on the calls already made.
-        state.update({"date": today, "count": 0, "recent": []})
+    # The load, the mutation and the save are one indivisible step. Read
+    # `_rate_state_lock` for what was measured before they were.
+    with _rate_state_lock():
+        state = _load_rate_state()
+        today = datetime.now().astimezone().strftime("%Y-%m-%d")
+        if state.get("date") != today:
+            # Reset only the keys THIS check owns. Rebinding `state` to a fresh
+            # three-key literal also dropped `tool_history`, which
+            # check_tool_budget owns and which is a rolling 30-minute window,
+            # not a daily one. The first write after local midnight therefore
+            # emptied that window, so a runaway loop straddling midnight
+            # restarted its count at 1 and neither the soft nor the hard tool
+            # cap could fire on the calls already made.
+            state.update({"date": today, "count": 0, "recent": []})
 
-    state["count"] = int(state.get("count", 0)) + 1
-    state["recent"] = (state.get("recent", []) + [[tool_name, file_path, int(time.time())]])[-RATE_LIMIT_LOOP_WINDOW:]
-    _save_rate_state(state)
+        state["count"] = int(state.get("count", 0)) + 1
+        state["recent"] = (state.get("recent", []) + [[tool_name, file_path, int(time.time())]])[-RATE_LIMIT_LOOP_WINDOW:]
+        _save_rate_state(state)
 
     # Hard limit - block
     if state["count"] > RATE_LIMIT_HARD:
@@ -1989,23 +2094,30 @@ def check_tool_budget(payload: dict) -> dict | None:
         return None
     tool_input = payload.get("tool_input", {}) or {}
 
-    state = _load_rate_state()
-    now_ts = int(time.time())
-    window_seconds = TOOL_BUDGET_WINDOW_MINUTES * 60
-    cutoff = now_ts - window_seconds
+    # Under the same lock as `check_rate_limit`, and it is the same lock rather
+    # than a second one: both checks read-modify-write ONE file, so a sibling
+    # left racing would have gone on overwriting this one's entries through the
+    # shared state dict. Both run in this process on the same tool call, one
+    # after the other, and neither hold nests inside the other.
+    with _rate_state_lock():
+        state = _load_rate_state()
+        now_ts = int(time.time())
+        window_seconds = TOOL_BUDGET_WINDOW_MINUTES * 60
+        cutoff = now_ts - window_seconds
 
-    # Keep tool-call history separately from write history (check_rate_limit owns "recent")
-    tool_history = [
-        entry for entry in state.get("tool_history", [])
-        if isinstance(entry, list) and len(entry) >= 2 and entry[1] >= cutoff
-    ]
-    signature = _stable_args_signature(tool_name, tool_input)
-    tool_history.append([signature, now_ts])
-    # Keep history bounded, but the bound MUST stay above the hard cap or the cap
-    # can never fire: count is len(tool_history), and truncating storage below the
-    # cap means a reloaded window can never reach it. Margin of +100 over the cap.
-    state["tool_history"] = tool_history[-(TOOL_BUDGET_HARD + 100):]
-    _save_rate_state(state)
+        # Keep tool-call history separately from write history (check_rate_limit owns "recent")
+        tool_history = [
+            entry for entry in state.get("tool_history", [])
+            if isinstance(entry, list) and len(entry) >= 2 and entry[1] >= cutoff
+        ]
+        signature = _stable_args_signature(tool_name, tool_input)
+        tool_history.append([signature, now_ts])
+        # Keep history bounded, but the bound MUST stay above the hard cap or the
+        # cap can never fire: count is len(tool_history), and truncating storage
+        # below the cap means a reloaded window can never reach it. Margin of
+        # +100 over the cap.
+        state["tool_history"] = tool_history[-(TOOL_BUDGET_HARD + 100):]
+        _save_rate_state(state)
 
     count = len(tool_history)
 

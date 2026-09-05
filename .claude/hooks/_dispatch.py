@@ -127,14 +127,14 @@ def _record_denial(mechanism: str, payload: dict, reason: str) -> None:
 # ============================================================
 
 SECRET_PATTERNS = [
-    (re.compile(r'sk-ant-[a-zA-Z0-9_-]{16,}'), "Anthropic API key"),
-    (re.compile(r'pplx-[a-zA-Z0-9]{16,}'), "Perplexity API key"),
-    (re.compile(r'r8_[a-zA-Z0-9]{16,}'), "Replicate API token"),
-    (re.compile(r'fc-[A-Za-z0-9]{16,}'), "Firecrawl API key"),
-    (re.compile(r'ctx7sk-[a-zA-Z0-9-]{16,}'), "Context7 API key"),
-    (re.compile(r'cpx-[a-zA-Z0-9]{16,}'), "CLIProxyAPI local proxy key"),
-    (re.compile(r'ghp_[a-zA-Z0-9]{16,}'), "GitHub personal access token"),
-    (re.compile(r'gho_[a-zA-Z0-9]{16,}'), "GitHub OAuth token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])sk-ant-[a-zA-Z0-9_-]{16,}'), "Anthropic API key"),
+    (re.compile(r'(?<![A-Za-z0-9_-])pplx-[a-zA-Z0-9]{16,}'), "Perplexity API key"),
+    (re.compile(r'(?<![A-Za-z0-9_-])r8_[a-zA-Z0-9]{16,}'), "Replicate API token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])fc-[A-Za-z0-9]{16,}'), "Firecrawl API key"),
+    (re.compile(r'(?<![A-Za-z0-9_-])ctx7sk-[a-zA-Z0-9-]{16,}'), "Context7 API key"),
+    (re.compile(r'(?<![A-Za-z0-9_-])cpx-[a-zA-Z0-9]{16,}'), "CLIProxyAPI local proxy key"),
+    (re.compile(r'(?<![A-Za-z0-9_-])ghp_[a-zA-Z0-9]{16,}'), "GitHub personal access token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])gho_[a-zA-Z0-9]{16,}'), "GitHub OAuth token"),
     # Boundary-anchored so an embedded base64 image cannot spell a key. The
     # reasoning, the measurement, and why the padding character is NOT in the
     # lookahead live in `scripts/utils/secret_patterns.py`; this copy exists
@@ -142,11 +142,11 @@ SECRET_PATTERNS = [
     # and `tests/security/test_SEC_004_credential_patterns.py` holds the two
     # byte-identical.
     (re.compile(r'(?<![A-Za-z0-9+/])AKIA[0-9A-Z]{16}(?![A-Za-z0-9+/])'), "AWS access key"),
-    (re.compile(r'xoxb-[0-9]+-[a-zA-Z0-9]+'), "Slack bot token"),
-    (re.compile(r'xoxp-[0-9]+-[a-zA-Z0-9]+'), "Slack user token"),
-    (re.compile(r'ya29\.[A-Za-z0-9._-]{50,}'), "Google OAuth token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])xoxb-[0-9]+-[a-zA-Z0-9]+'), "Slack bot token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])xoxp-[0-9]+-[a-zA-Z0-9]+'), "Slack user token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])ya29\.[A-Za-z0-9._-]{50,}'), "Google OAuth token"),
     # JWT, PEM private keys, and credentialed connection strings (F-L3; mirror in secret-scanner.py)
-    (re.compile(r'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'), "JWT bearer token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'), "JWT bearer token"),
     (re.compile(r'-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'), "PEM private key"),
     (re.compile(r'[a-zA-Z][a-zA-Z0-9+.-]{0,31}://(?!user:pass(?:word)?@|username:password@)[^:@\s/?]{2,}:[^:@\s/?]{2,}@'), "connection string with inline credentials"),
     (re.compile(
@@ -3801,6 +3801,51 @@ def _yard_foreign_checkout_containing(path: Path, helm: Path) -> Path | None:
     return None
 
 
+# Verbs that destroy or move what they are pointed at. Consulted for ONE
+# question, below: is a bare `/` in this command the argument of something that
+# would destroy every worktree on the machine? A verb missing from this set only
+# returns that command to the state it was in before `_yard_word_is_root`
+# existed, so a gap here is not a new hole.
+_YARD_DESTRUCTIVE_VERBS = frozenset((
+    "rm", "rmdir", "unlink", "shred", "mv", "dd", "truncate", "mkfs",
+    "chmod", "chown", "chgrp",
+))
+
+
+def _yard_word_is_root(word: str) -> bool:
+    """True when a shell word is the filesystem root itself.
+
+    `/`, `//`, `'/'`. Asked of the SHAPE and never by resolving: this runs on
+    every tool call, and the answer must not depend on the filesystem.
+    """
+    stripped = word.strip("'\"")
+    return bool(stripped) and set(stripped) == {"/"}
+
+
+def _yard_root_destruction(verb: str, words: list[str]) -> str | None:
+    """A destructive verb aimed at `/`, which is a different question.
+
+    Separate from the containing-directory check because the two answers differ
+    in kind. `rm -rf /` does not REACH another task's worktree; it destroys the
+    machine, and a refusal saying "you touched a neighbour" misnames it. This is
+    where that command keeps its refusal when `/` stops counting as evidence of
+    reaching a neighbour.
+    """
+    if verb not in _YARD_DESTRUCTIVE_VERBS:
+        return None
+    if not any(_yard_word_is_root(word) for word in words[1:]):
+        return None
+    # The wording opens with the same words as every other refusal from this
+    # wall, because `_denied_by_this_wall` in the tests asks WHICH wall said no
+    # and a refusal nobody can attribute is one the suite cannot hold.
+    return (
+        f"YARD isolation guard — intentional policy block, not an error. This "
+        f"command points `{verb}` at the filesystem root, which holds HELM, the "
+        f"data overlay and every task's worktree.\n\n"
+        f"Nothing in a YARD needs that. Name the directory you mean."
+    )
+
+
 def _yard_foreign_reason(where: Path) -> str:
     return (
         f"YARD isolation guard — intentional policy block, not an error. "
@@ -4062,10 +4107,34 @@ def check_yard_write_guard(payload: dict) -> dict | None:
             # spelling its name. Only the absolute words, and only when the link
             # is not a read: otherwise `ls <the directory they all live in>`
             # would be refused, and that is a read of nothing but names.
+            # THE FILESYSTEM ROOT IS NOT EVIDENCE. Every neighbour is under `/`,
+            # and so are HELM and the data overlay, which this YARD is allowed to
+            # read, so a lone `/` never distinguished a neighbour from the two
+            # places it may reach: it matched every command that happened to
+            # contain the character. MEASURED 2026-09-05 in `yard-day-mode-routes`:
+            # two `python - <<EOF` heredocs were refused over the pathlib
+            # operator in `SCRATCH / rel` and `Path(root) / rel`, each refusal
+            # naming a worktree the command had never mentioned, because
+            # `_yard_words` splits on whitespace and a binary `/` is a word.
+            #
+            # Reading the heredoc BODY stays, deliberately: a heredoc that opens
+            # a neighbour's file must still be refused, and it is `/` that had to
+            # stop counting rather than the body. A word naming a real containing
+            # directory is unchanged, which is the case this branch was written
+            # for and which `test_rm_of_the_containing_directory_is_refused`
+            # still drives.
+            #
+            # `rm -rf /` keeps its refusal, in `_yard_root_destruction`, where
+            # the reason can say what that command actually does.
             neighbour = next(
                 (root for word in words for root in foreign_roots
-                 if word.startswith("/") and _yard_is_under(root, Path(word.strip("'\"")))),
+                 if word.startswith("/") and not _yard_word_is_root(word)
+                 and _yard_is_under(root, Path(word.strip("'\"")))),
                 None)
+            if neighbour is None:
+                rooted = _yard_root_destruction(verb, words)
+                if rooted is not None:
+                    return _yard_deny(rooted)
         if neighbour is not None:
             return _yard_deny(_yard_foreign_reason(neighbour))
 

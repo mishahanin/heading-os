@@ -44,6 +44,40 @@ short. It is that both halves ask git the same question in the same world.
 ``git remote get-url --push`` already reports the URL a push will really use,
 including ``pushurl``, ``insteadOf`` and ``pushInsteadOf``; it was simply being
 asked under the wrong environment.
+
+EVERY MESSAGE OUT OF HERE GOES THROUGH ``safe_for_stream``. This module decodes
+git's raw path bytes with ``surrogateescape`` on purpose (see
+``enclosing_repo_root``), so a repository directory named ``b"re\\xffpo"``
+becomes the string ``"re\\udcffpo"`` and every comparison downstream is exact.
+A lone surrogate cannot be ENCODED by any codec, so printing one raises. The
+wall is documented as failing open and LOUDLY, and MEASURED 2026-09-05 on
+``main`` at 26d84ca the loud part was a hard crash of the push itself:
+``UnicodeEncodeError: 'utf-8' codec can't encode character '\\udcff'`` out of
+the NOTE below, killing the operation the diagnostic exists to narrate.
+
+Two classes of sink are covered, and the reason the second is not left to its
+callers is that there are four of them: ``push-all.py`` prints the objection,
+``safe-push.py`` prints ``reason`` and ``tail``, ``publish-service.py`` prints
+``reason``, and ``promote-knowledge.py`` calls ``reason.encode()`` with the
+default strict UTF-8. Escaping at the producer is one place to get right.
+
+  * the three ``print`` calls in ``remote_objection``;
+  * every ``reason`` (and the display-only ``tail``) in a refusal dict.
+
+NOT covered, deliberately:
+
+  * ``logger.debug`` calls. Their destination stream is not knowable at the call
+    site (a handler may write a file in another encoding), and
+    ``logging.Handler.emit`` already catches the encode error and routes it to
+    ``handleError`` rather than letting it reach the push. The message is lost,
+    which is the wrong trade for a stream this module does not own; a logging
+    formatter is the place to fix it, not here.
+  * ``run_supervised``. Checked, and it has no such sink: the child's output
+    goes to the log at FD level with no encode step, ``_tail`` decodes with
+    ``"replace"``, and ``_write_status`` uses ``json.dumps`` whose default
+    ``ensure_ascii=True`` renders ``"push:re\\udcffpo"`` as pure ASCII.
+  * ``verdict["flagged"]``, which is DATA a caller compares against paths on
+    disk. Escaping it would hand back a filename that names no file.
 """
 from __future__ import annotations
 
@@ -62,6 +96,7 @@ from urllib.error import HTTPError, URLError
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from scripts.utils.engine_guard import scan_engine_repo
+from scripts.utils.stream_safe import safe_for_stream
 from scripts.utils.supervise import run_supervised
 from scripts.utils.workspace import (
     get_data_root,
@@ -364,8 +399,9 @@ def remote_objection(repo, *, token: Optional[str] = None,
         # unreadable roots is neither exempted nor checked. Say so out loud
         # rather than returning a clean "no objection" that reads like a pass.
         logger.debug("remote wall: workspace roots unreadable: %s", exc)
-        print(f"WARNING: could not resolve the workspace roots, so the offline "
-              f"remote check did not run for {Path(repo).name}. Reason: {exc}")
+        print(safe_for_stream(
+            f"WARNING: could not resolve the workspace roots, so the offline "
+            f"remote check did not run for {Path(repo).name}. Reason: {exc}"))
         return None
     if data == engine:
         # Pre-cutover single repository: one repo, one remote, nothing to
@@ -388,15 +424,24 @@ def remote_objection(repo, *, token: Optional[str] = None,
     here = _normalize_remote_url(url if url is not None else remote)
 
     engine_urls = _engine_push_urls(engine, env=env)
+    # Every string this function RETURNS is a message a caller prints:
+    # `push-all.py` prints the objection, `safe-push.py` and `publish-service.py`
+    # print `verdict["reason"]`, and `promote-knowledge.py` does
+    # `reason.encode()` with the default strict UTF-8 into a
+    # `CalledProcessError`. `repo.name` and `here` are both derived from
+    # filesystem or git bytes and carry surrogates, so escaping happens HERE,
+    # once, rather than at four call sites that each have to remember.
     if here in engine_urls:
-        return (f"{repo.name} pushes to the ENGINE remote ({here}), which is the "
-                f"public code repository. Refusing: this would publish private "
-                f"content.")
+        return safe_for_stream(
+            f"{repo.name} pushes to the ENGINE remote ({here}), which is the "
+            f"public code repository. Refusing: this would publish private "
+            f"content.")
 
     visibility, fresh = _visibility_cached(here, token)
     if visibility == "public":
-        return (f"{repo.name} pushes to {here}, which GitHub reports as PUBLIC. "
-                f"Refusing: only the engine may push to a public repository.")
+        return safe_for_stream(
+            f"{repo.name} pushes to {here}, which GitHub reports as PUBLIC. "
+            f"Refusing: only the engine may push to a public repository.")
     if visibility is None and fresh and token and here.partition("/")[0] == "github.com":
         # Fail open, loudly. Check A carries the hard guarantee precisely
         # because it is offline and therefore always available; Check B raises
@@ -414,8 +459,9 @@ def remote_objection(repo, *, token: Optional[str] = None,
         # 404s, which is not a lookup that failed but a question that could not
         # be asked; warning on every tokenless dry run would teach the operator
         # to scroll past the one warning that matters.
-        print(f"WARNING: could not verify the visibility of {here}. "
-              f"Pushing on the offline check alone.")
+        print(safe_for_stream(
+            f"WARNING: could not verify the visibility of {here}. "
+            f"Pushing on the offline check alone."))
     elif fresh:
         # A separate signal for the other ways this function reaches "no
         # objection" without either check having actually evaluated anything:
@@ -440,9 +486,10 @@ def remote_objection(repo, *, token: Optional[str] = None,
             parts.append("GitHub was not asked, or could not answer, whether "
                           "this remote is public")
         if parts:
-            print(f"NOTE: the remote wall reached its lower ceiling for "
-                  f"{repo.name} ({here}): {'; '.join(parts)}. Proceeding "
-                  f"without full confirmation.")
+            print(safe_for_stream(
+                f"NOTE: the remote wall reached its lower ceiling for "
+                f"{repo.name} ({here}): {'; '.join(parts)}. Proceeding "
+                f"without full confirmation."))
     return None
 
 
@@ -626,7 +673,12 @@ def supervised_push(
     if root is not None and root != repo.resolve():
         return {
             "state": "failed",
-            "reason": (
+            # Both paths came out of `enclosing_repo_root`, which decodes git's
+            # raw answer with `surrogateescape` on purpose, so both can hold a
+            # byte no codec encodes. The reason is display text every caller
+            # prints; escaping it here is what keeps the refusal readable
+            # instead of turning it into a UnicodeEncodeError one frame up.
+            "reason": safe_for_stream(
                 f"{repo} is not a git repository root: it sits inside the "
                 f"repository at {root}. Pushing from here would push "
                 f"'{root.name}', and the ahead/behind postcondition would "
@@ -650,7 +702,7 @@ def supervised_push(
     if unreadable:
         return {
             "state": "failed",
-            "reason": (
+            "reason": safe_for_stream(
                 f"cannot resolve the workspace roots, so the engine/data leak wall "
                 f"could not run on this engine clone; refusing to push. Reason: "
                 f"{unreadable}"
@@ -667,13 +719,17 @@ def supervised_push(
             preview = ", ".join(flagged[:5]) + (" ..." if len(flagged) > 5 else "")
             return {
                 "state": "failed",
-                "reason": (
+                "reason": safe_for_stream(
                     f"engine clone carries {len(flagged)} data-class artifact(s) "
                     f"(route private/corporate); refusing to push: {preview}"
                 ),
                 "elapsed_s": 0.0,
                 "exit_code": None,
-                "tail": "\n".join(flagged),
+                # `tail` is display too - `safe-push.py` prints it line by line -
+                # while `flagged` is DATA a caller may compare against paths on
+                # disk, so only the display copy is escaped. Escaping `flagged`
+                # would hand a caller a filename that no longer names the file.
+                "tail": safe_for_stream("\n".join(flagged)),
                 "flagged": flagged,
             }
 

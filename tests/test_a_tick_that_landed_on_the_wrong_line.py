@@ -964,7 +964,12 @@ def test_the_systemd_readme_placeholder_list_matches_the_templates():
             continue
         tokens |= set(_re.findall(r"\{\{[A-Z_]+\}\}", _read_unit_or_fail(p)))
     readme = (tpl_dir / "README.md").read_text(encoding="utf-8")
-    assert tokens == {"{{WORKSPACE}}", "{{PYTHON}}", "{{TZ}}"}, tokens
+    # {{TOOLPATH}} joined the set on 2026-09-05, rendered by
+    # install-nightly-refresh-timer.sh into nightly-refresh.service alone. A
+    # systemd user service inherits the MANAGER's PATH, which reaches no
+    # per-user tool directory, and the night that ran under it skipped 240 tests
+    # instead of 2 and still marked the tree green.
+    assert tokens == {"{{WORKSPACE}}", "{{PYTHON}}", "{{TZ}}", "{{TOOLPATH}}"}, tokens
     for tok in tokens:
         assert tok in readme, f"{tok} is substituted but undocumented"
 

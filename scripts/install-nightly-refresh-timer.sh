@@ -168,6 +168,31 @@ fi
 # imports.
 TZ_VALUE="${HEADING_OS_TZ:-$(cd "$WORKSPACE" && "$PYTHON" -m scripts.utils.paths tz || echo UTC)}"
 
+# The PATH the night runs under, taken from the shell that installs it.
+#
+# A systemd user service does NOT inherit the installing shell's environment; it
+# gets the user manager's, which on this machine is
+# /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+# and carries neither ~/.local/bin, nor ~/bin, nor the nvm node bin. MEASURED
+# 2026-09-05: with that PATH, gh, git-lfs, node, npx, marp, uv, pre-commit,
+# claude and herdr are all absent, 240 tests skipped instead of 2, and the run
+# still exited 0. The night marked green over 238 checks that never executed.
+#
+# Taking the installer's own PATH is the honest derivation rather than a clever
+# one: this script runs from the operator's interactive shell in HELM, so its
+# PATH is by construction the one under which `python scripts/run-tests.py`
+# passes with the baseline skip count. Nothing else on the machine knows that
+# set, and there is no .env key to read it from, so the "second, staler source
+# of truth" objection this directory's README raises against pinning
+# HEADING_OS_TZ into a unit does not have an alternative to point at here.
+#
+# It CAN go stale, and that is handled rather than denied: bump the nvm node
+# version and this PATH stops resolving node until the installer is re-run. The
+# skip ceiling in config/nightly-skip-baseline.json is what makes that loud
+# instead of silent, which is why the ceiling is the control and this line is
+# the convenience. Override with TOOL_PATH=... for a deliberate value.
+TOOL_PATH="${TOOL_PATH:-$PATH}"
+
 # Uninstall path: disable + remove the units, then reload.
 if [[ "${1:-}" == "--uninstall" || "${1:-}" == "uninstall" ]]; then
     systemctl --user disable --now "$UNIT_NAME.timer" 2>/dev/null || true
@@ -196,6 +221,7 @@ for unit in "$UNIT_NAME.service" "$UNIT_NAME.timer"; do
     sed -e "s|{{WORKSPACE}}|${WORKSPACE}|g" \
         -e "s|{{PYTHON}}|${PYTHON}|g" \
         -e "s|{{TZ}}|${TZ_VALUE}|g" \
+        -e "s|{{TOOLPATH}}|${TOOL_PATH}|g" \
         "$TEMPLATE_DIR/$unit" > "$DEST_DIR/$unit"
 done
 

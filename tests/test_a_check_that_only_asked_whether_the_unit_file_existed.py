@@ -46,6 +46,7 @@ main clone, and it was deliberately not taken here.
 """
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -80,10 +81,16 @@ exit 0
 
 
 def _render(text: str, workspace: str, tz: str = "Etc/UTC") -> str:
-    """The installer's own three substitutions, applied the installer's way."""
+    """The installer's own four substitutions, applied the installer's way.
+
+    Kept in step with the installer by
+    `test_every_token_in_the_templates_is_one_the_installer_substitutes`, which
+    reads both sides rather than trusting this copy.
+    """
     return (text.replace("{{WORKSPACE}}", workspace)
                 .replace("{{PYTHON}}", f"{workspace}/.venv/bin/python")
-                .replace("{{TZ}}", tz))
+                .replace("{{TZ}}", tz)
+                .replace("{{TOOLPATH}}", "/opt/tools/bin:/usr/bin:/bin"))
 
 
 @pytest.fixture()
@@ -298,6 +305,57 @@ def test_the_rendered_units_carry_the_three_mechanisms_and_no_locale(helm):
     assert not any(line.startswith("Environment=HEADING_OS_TZ") for line in directives), (
         "a zone pinned into the unit becomes a second, staler source than .env")
     assert any(line.startswith("Environment=TZ=") for line in directives)
+    # The night of 2026-09-05 ran under the user manager's PATH, which carries no
+    # per-user tool directory, so 240 tests skipped and the run still exited 0.
+    # Without this directive the unit inherits that PATH again.
+    assert any(line.startswith("Environment=PATH=") for line in directives), (
+        "a user service inherits the manager's PATH, which reaches none of the "
+        "tools the suite gates on")
+    raw_service = (TEMPLATES / "nightly-refresh.service").read_text(encoding="utf-8")
+    assert "Environment=PATH={{TOOLPATH}}" in raw_service, (
+        "the PATH must arrive from the installer, never as a literal home "
+        "directory baked into a tracked template")
+
+
+def test_every_token_in_the_templates_is_one_the_installer_substitutes():
+    """A token the installer does not know is copied through verbatim.
+
+    `--check` catches that afterwards by grepping the rendered units for `{{`,
+    but only once someone has installed them, and the unit it catches is already
+    inert. This asks the two files directly. Both sides are read from disk: a
+    test that spelled the expected set would be a third copy, and the third copy
+    is the one that stops being updated.
+
+    MEASURED 2026-09-05: adding `Environment=PATH={{TOOLPATH}}` to the service
+    while leaving the installer's `sed` block at its three expressions fails
+    here, naming TOOLPATH.
+    """
+    # Named, not globbed. This timer is a service and a timer and nothing else,
+    # so a walk buys no coverage here and would put a walk-then-read on a
+    # completeness claim, which `tests/test_a_guard_that_crashed_on_a_file_that_
+    # vanished_mid_walk.py` refuses on sight.
+    tokens = set()
+    for name in ("nightly-refresh.service", "nightly-refresh.timer"):
+        unit = TEMPLATES / name
+        assert unit.is_file(), f"{name} is missing; the timer cannot be rendered"
+        tokens |= set(re.findall(r"\{\{([A-Z_]+)\}\}",
+                                 unit.read_text(encoding="utf-8")))
+    assert tokens, "the templates carry no placeholder at all"
+
+    installer = INSTALLER.read_text(encoding="utf-8")
+    substituted = set(re.findall(r"s\|\{\{([A-Z_]+)\}\}\|", installer))
+    assert tokens <= substituted, (
+        f"the templates use {sorted(tokens - substituted)}, which "
+        f"{INSTALLER_NAME} never substitutes; those reach the unit as literal "
+        "text and the unit is installed and inert")
+
+
+def test_the_rendered_service_bounds_a_wedged_night(helm):
+    """Split out of the rendering case above; same file, same claim shape."""
+    service = _render((TEMPLATES / "nightly-refresh.service").read_text(encoding="utf-8"),
+                      str(helm["clone"]))
+    directives = [line for line in service.splitlines()
+                  if line.strip() and not line.lstrip().startswith("#")]
     # A bound the unit chooses. `Type=oneshot` DISABLES the start timeout by
     # default (`man systemd.service`: "except when Type=oneshot is used, in
     # which case the timeout is disabled by default"), so this is not restoring

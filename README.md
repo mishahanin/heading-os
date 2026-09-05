@@ -69,7 +69,7 @@ You clone the engine; you create your own private data repository ([one command]
 
 Every figure here is produced by CI, not asserted by hand. Counts as of `v0.14.0`, kept honest by `scripts/dev/check-readme-numbers.py`.
 
-- **582 security tests**, run on every commit by the [`security-tests`](.github/workflows/ci.yml) job over [`tests/security/`](tests/security). This is the suite that proves the guarantees below.
+- **690 security tests**, run on every commit by the [`security-tests`](.github/workflows/ci.yml) job over [`tests/security/`](tests/security). This is the suite that proves the guarantees below.
 - **7 enforcement layers** hold the engine and data apart: a [bypass guard](tests/test_data_root_no_bypass.py), a [leak guard](scripts/leak-guard.py), a data-path redirect hook, a build partition, a [runtime tree-clean check](tests/test_engine_tree_clean.py), an [unbypassable push-time wall](scripts/push-all.py), and a [content guard](scripts/content-guard.py).
 - **Router accuracy**: pending. The nightly router-accuracy trend (F-6.2) needs a week of data before a number is published here.
 

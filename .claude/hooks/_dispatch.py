@@ -127,14 +127,14 @@ def _record_denial(mechanism: str, payload: dict, reason: str) -> None:
 # ============================================================
 
 SECRET_PATTERNS = [
-    (re.compile(r'sk-ant-[a-zA-Z0-9_-]{16,}'), "Anthropic API key"),
-    (re.compile(r'pplx-[a-zA-Z0-9]{16,}'), "Perplexity API key"),
-    (re.compile(r'r8_[a-zA-Z0-9]{16,}'), "Replicate API token"),
-    (re.compile(r'fc-[A-Za-z0-9]{16,}'), "Firecrawl API key"),
-    (re.compile(r'ctx7sk-[a-zA-Z0-9-]{16,}'), "Context7 API key"),
-    (re.compile(r'cpx-[a-zA-Z0-9]{16,}'), "CLIProxyAPI local proxy key"),
-    (re.compile(r'ghp_[a-zA-Z0-9]{16,}'), "GitHub personal access token"),
-    (re.compile(r'gho_[a-zA-Z0-9]{16,}'), "GitHub OAuth token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])sk-ant-[a-zA-Z0-9_-]{16,}'), "Anthropic API key"),
+    (re.compile(r'(?<![A-Za-z0-9_-])pplx-[a-zA-Z0-9]{16,}'), "Perplexity API key"),
+    (re.compile(r'(?<![A-Za-z0-9_-])r8_[a-zA-Z0-9]{16,}'), "Replicate API token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])fc-[A-Za-z0-9]{16,}'), "Firecrawl API key"),
+    (re.compile(r'(?<![A-Za-z0-9_-])ctx7sk-[a-zA-Z0-9-]{16,}'), "Context7 API key"),
+    (re.compile(r'(?<![A-Za-z0-9_-])cpx-[a-zA-Z0-9]{16,}'), "CLIProxyAPI local proxy key"),
+    (re.compile(r'(?<![A-Za-z0-9_-])ghp_[a-zA-Z0-9]{16,}'), "GitHub personal access token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])gho_[a-zA-Z0-9]{16,}'), "GitHub OAuth token"),
     # Boundary-anchored so an embedded base64 image cannot spell a key. The
     # reasoning, the measurement, and why the padding character is NOT in the
     # lookahead live in `scripts/utils/secret_patterns.py`; this copy exists
@@ -142,11 +142,11 @@ SECRET_PATTERNS = [
     # and `tests/security/test_SEC_004_credential_patterns.py` holds the two
     # byte-identical.
     (re.compile(r'(?<![A-Za-z0-9+/])AKIA[0-9A-Z]{16}(?![A-Za-z0-9+/])'), "AWS access key"),
-    (re.compile(r'xoxb-[0-9]+-[a-zA-Z0-9]+'), "Slack bot token"),
-    (re.compile(r'xoxp-[0-9]+-[a-zA-Z0-9]+'), "Slack user token"),
-    (re.compile(r'ya29\.[A-Za-z0-9._-]{50,}'), "Google OAuth token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])xoxb-[0-9]+-[a-zA-Z0-9]+'), "Slack bot token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])xoxp-[0-9]+-[a-zA-Z0-9]+'), "Slack user token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])ya29\.[A-Za-z0-9._-]{50,}'), "Google OAuth token"),
     # JWT, PEM private keys, and credentialed connection strings (F-L3; mirror in secret-scanner.py)
-    (re.compile(r'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'), "JWT bearer token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'), "JWT bearer token"),
     (re.compile(r'-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'), "PEM private key"),
     (re.compile(r'[a-zA-Z][a-zA-Z0-9+.-]{0,31}://(?!user:pass(?:word)?@|username:password@)[^:@\s/?]{2,}:[^:@\s/?]{2,}@'), "connection string with inline credentials"),
     (re.compile(

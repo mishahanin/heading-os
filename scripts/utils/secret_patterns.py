@@ -29,16 +29,51 @@ ALLOWLIST_TOKEN = "pragma: allowlist secret"
 
 # Secret patterns: (compiled_regex, description)
 # Thresholds tuned to avoid matching placeholders like "sk-ant-your-key-here"
+#
+# EVERY PREFIXED ENTRY OPENS WITH `(?<![A-Za-z0-9_-])`, and the reason is a
+# measurement rather than symmetry. A credential is a STANDALONE token: it sits
+# after an equals sign, a quote, a colon, whitespace, or at the start of a line.
+# A prefix preceded by another token character is not a credential, it is the
+# middle of a longer run, and a long enough run of the right alphabet spells any
+# short prefix by accident.
+#
+# MEASURED 2026-09-05 against generated base64URL payloads, which add `-` and
+# `_` to the alphabet and are what a JWT, a URL-safe blob or a signed URL is
+# made of:
+#
+#     100,000 chars     r8_ 1,  fc- 1                       ->  0
+#   1,000,000 chars     r8_ 3,  fc- 1,  gho_ 1              ->  0
+#  10,000,000 chars     r8_ 23, fc- 26                      ->  0
+#  40,000,000 chars     r8_ 94, fc- 97, cpx- 1, ghp_ 1, gho_ 2  ->  0
+#
+# `fc-` is three characters, so a run spells it about once per 260,000
+# positions; the {16,} tail then costs almost nothing because the run is made of
+# exactly those characters. This is the same defect the AWS entry had, one
+# alphabet over, and it was left unfixed on the first pass because it had only
+# been reasoned about and not measured. Reasoning put it at "no instance
+# observed"; measuring put it at two findings in 100 KB.
+#
+# `+` and `/` are deliberately NOT in this lookbehind, unlike the AWS entry's.
+# They buy nothing here: every prefix above needs a `-` or a `_`, and standard
+# base64 has neither, so only a base64url run can spell one. Excluding a
+# character that cannot precede the defect would only cost true positives, and
+# a token at the end of a URL path (`.../ghp_...`) is a shape worth keeping.
+#
+# WHAT REMAINS, stated rather than implied: a prefix at the very START of a
+# payload, where the character before it is the delimiter (`base64,ghp_...`).
+# The lookbehind passes there because a comma is not a token character. It needs
+# the accident to land on the first four characters of the blob rather than
+# anywhere in it, which is the difference between 97 hits in 40 MB and none.
 SECRET_PATTERNS = [
     # API key formats - require 16+ chars of key material after prefix (aligned with _dispatch.py, F-L4)
-    (re.compile(r'sk-ant-[a-zA-Z0-9_-]{16,}'), "Anthropic API key"),
-    (re.compile(r'pplx-[a-zA-Z0-9]{16,}'), "Perplexity API key"),
-    (re.compile(r'r8_[a-zA-Z0-9]{16,}'), "Replicate API token"),
-    (re.compile(r'fc-[A-Za-z0-9]{16,}'), "Firecrawl API key"),
-    (re.compile(r'ctx7sk-[a-zA-Z0-9-]{16,}'), "Context7 API key"),
-    (re.compile(r'cpx-[a-zA-Z0-9]{16,}'), "CLIProxyAPI local proxy key"),
-    (re.compile(r'ghp_[a-zA-Z0-9]{16,}'), "GitHub personal access token"),
-    (re.compile(r'gho_[a-zA-Z0-9]{16,}'), "GitHub OAuth token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])sk-ant-[a-zA-Z0-9_-]{16,}'), "Anthropic API key"),
+    (re.compile(r'(?<![A-Za-z0-9_-])pplx-[a-zA-Z0-9]{16,}'), "Perplexity API key"),
+    (re.compile(r'(?<![A-Za-z0-9_-])r8_[a-zA-Z0-9]{16,}'), "Replicate API token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])fc-[A-Za-z0-9]{16,}'), "Firecrawl API key"),
+    (re.compile(r'(?<![A-Za-z0-9_-])ctx7sk-[a-zA-Z0-9-]{16,}'), "Context7 API key"),
+    (re.compile(r'(?<![A-Za-z0-9_-])cpx-[a-zA-Z0-9]{16,}'), "CLIProxyAPI local proxy key"),
+    (re.compile(r'(?<![A-Za-z0-9_-])ghp_[a-zA-Z0-9]{16,}'), "GitHub personal access token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])gho_[a-zA-Z0-9]{16,}'), "GitHub OAuth token"),
     # THE BOUNDARY IS THE PATTERN, and without it this entry stops pushes over
     # credentials that are not there. An AWS access key ID is a STANDALONE
     # twenty-character token: it sits after an equals sign, inside quotes, on its
@@ -49,14 +84,21 @@ SECRET_PATTERNS = [
     # one of them inside an embedded image, e.g. `...AAAAAAAAAIUC` before and
     # `CwWBUFQAAVBY` after. Zero were tokens.
     #
-    # `AKIA` is the ONLY entry in this table a base64 run can spell. Measured the
-    # same day by planting each prefix in a random run: every other bare-literal
-    # prefix carries a `-`, a `_`, or a `.`, none of which is in the standard
-    # base64 alphabet, and `eyJ` is spellable but the JWT pattern needs two
-    # literal dots that base64 has not got. The residual, named rather than left
-    # to be found: base64URL uses `-` and `_`, so a large enough base64url blob
-    # could spell `ghp_`, `gho_` or `r8_`. No instance has been observed, and a
-    # boundary was not added to those without one.
+    # `AKIA` is the only entry a STANDARD base64 run can spell: every other
+    # bare-literal prefix carries a `-`, a `_` or a `.`, and standard base64 has
+    # none of the three.
+    #
+    # THAT SENTENCE WAS ONCE THE WHOLE ARGUMENT, and it was half of one. It
+    # concluded "so the others need no boundary", which held only for the
+    # alphabet it had looked at. base64URL adds `-` and `_`, and measuring it
+    # the same day put `r8_` and `fc-` at two findings in 100 KB. The lookbehind
+    # on every other entry above is that correction; the header comment carries
+    # the numbers. Left here as a worked example of the failure it was: an
+    # argument stated as a measurement, in a file where a wrong claim about
+    # coverage costs a credential.
+    #
+    # This entry keeps `+/` in its own boundary and the others do not, because
+    # `AKIA` is the one prefix standard base64 reaches.
     #
     # THE PADDING CHARACTER IS DELIBERATELY NOT IN THE LOOKAHEAD, against the
     # first instinct, because it can only lose matches and cannot gain one. For
@@ -68,11 +110,11 @@ SECRET_PATTERNS = [
     # is left out: this is a security wall, and a rule that only ever subtracts
     # matches earns its place by measurement or not at all.
     (re.compile(r'(?<![A-Za-z0-9+/])AKIA[0-9A-Z]{16}(?![A-Za-z0-9+/])'), "AWS access key"),
-    (re.compile(r'xoxb-[0-9]+-[a-zA-Z0-9]+'), "Slack bot token"),
-    (re.compile(r'xoxp-[0-9]+-[a-zA-Z0-9]+'), "Slack user token"),
-    (re.compile(r'ya29\.[A-Za-z0-9._-]{50,}'), "Google OAuth token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])xoxb-[0-9]+-[a-zA-Z0-9]+'), "Slack bot token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])xoxp-[0-9]+-[a-zA-Z0-9]+'), "Slack user token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])ya29\.[A-Za-z0-9._-]{50,}'), "Google OAuth token"),
     # JWT, PEM private keys, and credentialed connection strings (F-L3; mirror in _dispatch.py)
-    (re.compile(r'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'), "JWT bearer token"),
+    (re.compile(r'(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'), "JWT bearer token"),
     (re.compile(r'-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'), "PEM private key"),
     (re.compile(r'[a-zA-Z][a-zA-Z0-9+.-]{0,31}://(?!user:pass(?:word)?@|username:password@)[^:@\s/?]{2,}:[^:@\s/?]{2,}@'), "connection string with inline credentials"),
     # Markdown password fields with actual values (not placeholders)

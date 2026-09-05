@@ -158,10 +158,11 @@ def test_the_dispatch_copy_carries_the_same_boundary():
 def test_no_other_entry_regressed_into_matching_a_plain_base64_run():
     """The whole table, not only the entry that was changed.
 
-    `AKIA` is the only prefix a standard base64 alphabet can spell, which is why
-    only it was given a boundary. This asserts that claim against a generated
-    payload rather than restating it: if another entry starts matching random
-    base64, the reason to have left it alone has expired.
+    `AKIA` is the only prefix a STANDARD base64 alphabet can spell, which is why
+    it is the only entry whose boundary excludes `+` and `/`. The claim is
+    asserted against a generated payload rather than restated. The base64URL
+    alphabet is a different question with a different answer, measured and fixed
+    in `test_a_prefix_a_base64url_run_spells_by_accident.py`.
     """
     rng = random.Random(20260906)  # noqa: S311 - a seeded base64 fixture, not crypto
     payload = "".join(rng.choice(BASE64) for _ in range(500_000))

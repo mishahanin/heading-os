@@ -230,6 +230,17 @@ REPO_HELPERS = frozenset(
         "not_ignored",
         "ignored_paths",
         "ignored_paths_or_none",
+        # `scripts/check-path-references.tracked_markdown` is `git ls-files
+        # '*.md'`: the whole Markdown corpus, so a test calling it has the tree
+        # as its input exactly like the six above. MEASURED 2026-09-05: adding
+        # it moves `tests/test_path_references.py` and
+        # `tests/test_an_acceptance_gate_that_grades_the_wrong_world.py` into
+        # the mandatory core, 158 files to 160. It changes no `undecided`
+        # verdict and therefore no push-gate decision, which is why the note
+        # that sent me here -- "this alone covered 15 of 38 no-route instances"
+        # -- was wrong: a sweep joins the CORE, and the core is selected on every
+        # invocation without being attributed to any one changed file.
+        "tracked_markdown",
     }
 )
 

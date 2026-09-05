@@ -133,9 +133,21 @@ DECLARED_CLAIMANTS: dict[str, dict[str, tuple[str, str]]] = {
     #
     # The release gate's two sentences are a different claim with a different
     # resolver. "the operator did not ask for a {action} in this turn" is a
-    # claim about what the human typed, and `_last_operator_prompt` establishes
-    # it by reading `type: "last-prompt"` records out of the transcript. The
-    # second sentence is the fail-closed branch of the same read.
+    # claim about the TURN, and `_last_operator_prompt` establishes it by
+    # reading the current turn's `last-prompt` and `promptSource: "typed"`
+    # records out of the transcript. The second sentence is the fail-closed
+    # branch of the same read.
+    #
+    # The first of them was REWORDED on 2026-09-06, which retired
+    # `5aac44670b3e`, and the reword is the point: it used to say the echoed
+    # line "is the operator's own typing, read from a record only the harness
+    # writes". MEASURED 2026-09-05, that is false. A prompt another Claude
+    # session delivers through `herdr agent prompt` is written into exactly
+    # those records, every field identical to a prompt the operator typed by
+    # hand. `_last_operator_prompt` establishes the RECORD and the TURN; it
+    # never established the AUTHOR, and the sentence now says only what the
+    # read supports. The author is not resolvable from the transcript at all,
+    # which is why `_BRIEF_MARKER` moves the discriminator into the text.
     ".claude/hooks/_dispatch.py": {
         "3cc5474f06f1": (  # pragma: allowlist secret
             "ask the graph first. this call reaches source code and no codegraph quer",
@@ -143,8 +155,8 @@ DECLARED_CLAIMANTS: dict[str, dict[str, tuple[str, str]]] = {
         "99b8b7154d10": (  # pragma: allowlist secret
             "consider fanning out. this session has investigated",
             "actor_id"),
-        "5aac44670b3e": (  # pragma: allowlist secret
-            "in this turn. their most recent typed words, echoed from the session tra",
+        "738cbf234ef7": (  # pragma: allowlist secret
+            "in this turn. the most recent typed prompt, echoed from the session tran",
             "_last_operator_prompt"),
         "c7a2cc1b8ca4": (
             "is refused. this wall reads `last-prompt` from the session transcript to",

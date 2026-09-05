@@ -61,11 +61,15 @@ The check reads the `Bash` command and classifies it with `release_action()`:
 - **`commit`** for a `git commit`, and for an annotated `git tag`. A bare `git tag` lists tags and passes.
 - **`None`** for everything else, which returns control to the next check.
 
-The check then reads the operator's most recent typed prompt from the session transcript. `prompt_authorises()` accepts the action when that prompt carries an authorising word in English or Russian, and refuses when it carries a negation anywhere. The check appends each authorised release to a log the operator can audit.
+The check then reads the most recent typed prompt from the session transcript. It reads two records. The harness-written `last-prompt` holds at most 200 characters, and the same turn's `promptSource: "typed"` record holds the full text. The capped record confirms the full one by prefix. `prompt_authorises()` accepts the action when that prompt carries an authorising word in English or Russian. It refuses when the prompt carries a negation anywhere. The check appends each authorised release to a log the operator can audit.
+
+**A marked brief never authorises.** The gate refuses a prompt carrying the line `X-HEADING-BRIEF: machine-to-machine, not an operator authorisation`, before it reads a single word. `scripts/herdr-brief.py` prepends that line to every brief HELM sends into a YARD. The gate matches it as a substring, so a quoted, indented or re-wrapped brief stays inert.
 
 **The gate fails closed.** It refuses the release when it cannot read the transcript. A gate that opens when it cannot see is not a gate.
 
 **Its coverage, stated exactly.** The gate sees `Bash` tool calls in a session that wires `_dispatch.py` on the `Bash` matcher. It does not see a commit or a push the operator types in their own terminal, and no claim here says otherwise. It is also not the push-time secret scan, which is separate code inside `scripts/push-all.py`. Read the [security model](SECURITY-MODEL.html) for how the two compose.
+
+**What the marker does not establish.** An UNMARKED prompt is not thereby established as the operator's typing. MEASURED 2026-09-05, the harness writes identical fields for both kinds: a prompt one Claude session delivered, and a prompt the operator typed by hand. No field says who produced the text. So the marker is fail-open by construction, and the only thing behind that is the sender. A brief sent by hand with a bare `herdr agent prompt` authorises exactly as it did before.
 
 ## PostToolUse (observe and correct)
 

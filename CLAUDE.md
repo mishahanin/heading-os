@@ -99,6 +99,18 @@ a human. The release gate is untouched and fixes the turn rather than the author
 so the rule above supplies the rest. Why the commit is otherwise safe, and the
 invented prohibition it replaces: `docs/ARCHITECTURE.md` § 8.
 
+**A brief leaves HELM through `scripts/herdr-brief.py` and through nothing else.**
+It prepends the line `X-HEADING-BRIEF: machine-to-machine, not an operator
+authorisation` and then delegates to `herdr agent prompt`, and the release gate
+refuses any commit or push whose authorising prompt carries that line anywhere in
+it. Marking has to be the SENDER's job, because MEASURED 2026-09-05 a prompt one
+session delivers into another is recorded with every field identical to one the
+operator typed, `promptSource: "typed"` included; nothing in the record says who
+produced the text. That closes one direction only. An UNMARKED prompt is not
+thereby established as the operator's, so a brief sent by hand with a bare
+`herdr agent prompt` still authorises exactly as it did before, which is why the
+sender is named here as the rule rather than left as a convenience.
+
 **The overlay, and the one rule.** Every artifact a task produces lands in the
 data overlay under `outputs/...`, resolved through the data-root helpers
 (`get_data_root()`, `get_outputs_dir()`) and never by a path built against the

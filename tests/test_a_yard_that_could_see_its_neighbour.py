@@ -391,6 +391,70 @@ def test_listing_that_same_directory_is_permitted(bench):
         _run(bench, bench.yard, _bash(f"ls {bench.base}", bench.yard)))
 
 
+def test_a_path_operator_in_a_heredoc_is_not_read_as_reaching_a_neighbour(bench):
+    """A lone `/` is a character, not a claim about a worktree.
+
+    THE DEFECT, MEASURED 2026-09-05 in `yard-day-mode-routes`. The containing
+    check asked, of every word starting with `/`, whether a neighbour sat under
+    it. `/` satisfies that for every neighbour there is, so any non-read-only
+    command carrying a bare `/` was refused, and the refusal named a worktree
+    the command had never mentioned. Two `python - <<EOF` measurement harnesses
+    were blocked over the pathlib operator in `SCRATCH / rel` before anyone
+    understood what the guard was objecting to.
+
+    `/` is also an ancestor of HELM and of the data overlay, both of which a
+    YARD may reach, so it never distinguished a neighbour from a permitted
+    directory. It is now excluded, and `rm -rf /` keeps its own refusal below.
+    """
+    command = (
+        "python3 - <<'EOF'\n"
+        "from pathlib import Path\n"
+        "SCRATCH = Path('/tmp/scratch')\n"
+        "print(SCRATCH / 'x.py')\n"
+        "EOF"
+    )
+    assert not _denied_by_this_wall(_run(bench, bench.yard, _bash(command, bench.yard)))
+
+
+def test_a_heredoc_that_names_a_neighbour_is_still_refused(bench):
+    """The paired direction, and the reason the body is still read.
+
+    Excluding `/` narrows one signal. It must not narrow the one that matters:
+    the guard reads the WHOLE command, heredoc body included, because a script
+    fed on stdin that opens another task's file is exactly the shape this wall
+    exists for.
+    """
+    command = (
+        "python3 - <<'EOF'\n"
+        f"print(open('{bench.neighbour}/CLAUDE.md').read())\n"
+        "EOF"
+    )
+    assert _denied_by_this_wall(_run(bench, bench.yard, _bash(command, bench.yard)))
+
+
+def test_destroying_the_filesystem_root_is_still_refused(bench):
+    """What `/` cost when it stopped being evidence, kept rather than lost.
+
+    `rm -rf /` reaches every neighbour without naming one. It is refused by its
+    own branch now, so the reason can say what the command actually does instead
+    of claiming it touched one particular worktree.
+    """
+    decision = _run(bench, bench.yard, _bash("rm -rf /", bench.yard))
+    assert _denied_by_this_wall(decision)
+    assert "filesystem root" in _reason(decision)
+
+
+@pytest.mark.parametrize("command", [
+    "rm -rf /",
+    "rm -rf '/'",
+    "rm -fr //",
+    "mv / /elsewhere",
+    "chmod -R 777 /",
+])
+def test_every_destructive_shape_aimed_at_the_root_is_refused(bench, command):
+    assert _denied_by_this_wall(_run(bench, bench.yard, _bash(command, bench.yard)))
+
+
 def test_a_neighbour_is_still_recognised_after_its_registration_is_gone(
     bench, disposable_neighbour,
 ):

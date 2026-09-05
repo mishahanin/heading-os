@@ -61,12 +61,53 @@ def install_pre_push(repo: Path, src: Path) -> None:
     dest.chmod(0o755)
 
 
-def check_pre_push(repo: Path) -> bool:
-    """True if the installed pre-push hook exists and references run-tests.py."""
+def pre_push_verdict(repo: Path, src: Path | None = None) -> tuple[bool, str]:
+    """(ok, what this check actually established) for repo's pre-push hook.
+
+    The verdict text is returned rather than printed because the caller owns the
+    wording, and because a check whose message says more than its method
+    established is the defect `.claude/rules/scope-claims.md` names. This one
+    said "MISSING/stale" while asking only whether the file contained the string
+    `run-tests.py`, which every version of the hook contains.
+
+    MEASURED 2026-09-05 in HELM: the installed hook was the pre-2026-09-04
+    shape, running `run-tests.py` with no `--pre-push` and no stdin replay, so
+    every push from this clone ran all 24,805 tests and the narrowing shipped
+    the day before had never once run. `--check` printed "engine pre-push hook
+    present" and exited 0 over it. A gate one version behind is exactly the
+    state this script exists to detect.
+
+    `install_pre_push` is a plain `copyfile` with nothing stamped in, so a byte
+    comparison against the versioned source is exact. When that source cannot be
+    read -- a partial checkout, a package that drops dotfiles -- the comparison
+    is IMPOSSIBLE rather than passed: fall back to the marker and say so, so the
+    caller reports reduced coverage instead of a clean bill.
+    """
     dest = _hooks_dir(repo) / "pre-push"
     if not dest.is_file():
-        return False
-    return "run-tests.py" in dest.read_text(encoding="utf-8")
+        return False, "no pre-push hook installed"
+    try:
+        installed = dest.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return False, f"the installed pre-push hook could not be read ({exc})"
+    if "run-tests.py" not in installed:
+        return False, "the installed pre-push hook does not run the test gate"
+    if src is None:
+        return True, "runs the test gate (not compared against the versioned source)"
+    try:
+        versioned = Path(src).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return True, (f"runs the test gate ({src} unreadable, so it was not "
+                      f"compared against the versioned source)")
+    if installed != versioned:
+        return False, (f"STALE: the installed hook differs from {src}. "
+                       f"Re-install:  python scripts/install-git-hooks.py")
+    return True, "matches the versioned source"
+
+
+def check_pre_push(repo: Path, src: Path | None = None) -> bool:
+    """True if the installed pre-push hook is armed and, given `src`, current."""
+    return pre_push_verdict(repo, src)[0]
 
 
 DATA_GATE_MARKER = "heading-os-data-test-gate"
@@ -211,9 +252,9 @@ def main() -> int:
     data = data_repo_to_gate(Path(get_data_root()), engine)
 
     if args.check:
-        ok = check_pre_push(engine)
-        print(f"{GREEN}engine pre-push hook present{RESET}" if ok
-              else f"{RED}engine pre-push hook MISSING/stale{RESET}")
+        ok, why = pre_push_verdict(engine, src)
+        print(f"{GREEN}engine pre-push hook: {why}{RESET}" if ok
+              else f"{RED}engine pre-push hook: {why}{RESET}")
         ok = _report_pre_commit(engine, "engine") and ok
         if data is not None:
             data_ok = check_pre_push_data(data)

@@ -39,7 +39,35 @@ SECRET_PATTERNS = [
     (re.compile(r'cpx-[a-zA-Z0-9]{16,}'), "CLIProxyAPI local proxy key"),
     (re.compile(r'ghp_[a-zA-Z0-9]{16,}'), "GitHub personal access token"),
     (re.compile(r'gho_[a-zA-Z0-9]{16,}'), "GitHub OAuth token"),
-    (re.compile(r'AKIA[0-9A-Z]{16}'), "AWS access key"),
+    # THE BOUNDARY IS THE PATTERN, and without it this entry stops pushes over
+    # credentials that are not there. An AWS access key ID is a STANDALONE
+    # twenty-character token: it sits after an equals sign, inside quotes, on its
+    # own line. It is never adjacent to more base64 characters on both sides,
+    # while `AKIA` followed by sixteen uppercase-or-digit characters is a run a
+    # base64 payload spells by accident. MEASURED 2026-09-05 on the refusal that
+    # blocked a real push: eight matches across two generated HTML files, every
+    # one of them inside an embedded image, e.g. `...AAAAAAAAAIUC` before and
+    # `CwWBUFQAAVBY` after. Zero were tokens.
+    #
+    # `AKIA` is the ONLY entry in this table a base64 run can spell. Measured the
+    # same day by planting each prefix in a random run: every other bare-literal
+    # prefix carries a `-`, a `_`, or a `.`, none of which is in the standard
+    # base64 alphabet, and `eyJ` is spellable but the JWT pattern needs two
+    # literal dots that base64 has not got. The residual, named rather than left
+    # to be found: base64URL uses `-` and `_`, so a large enough base64url blob
+    # could spell `ghp_`, `gho_` or `r8_`. No instance has been observed, and a
+    # boundary was not added to those without one.
+    #
+    # THE PADDING CHARACTER IS DELIBERATELY NOT IN THE LOOKAHEAD, against the
+    # first instinct, because it can only lose matches and cannot gain one. For
+    # `=` to sit immediately after this match inside a base64 payload, the run
+    # would have to start exactly at `AKIA` and be exactly twenty characters
+    # long, and twenty is a multiple of four, so well-formed base64 of that
+    # length carries no padding at all. The case cannot arise. What `=` in the
+    # lookahead WOULD do is drop a real key written immediately before one, so it
+    # is left out: this is a security wall, and a rule that only ever subtracts
+    # matches earns its place by measurement or not at all.
+    (re.compile(r'(?<![A-Za-z0-9+/])AKIA[0-9A-Z]{16}(?![A-Za-z0-9+/])'), "AWS access key"),
     (re.compile(r'xoxb-[0-9]+-[a-zA-Z0-9]+'), "Slack bot token"),
     (re.compile(r'xoxp-[0-9]+-[a-zA-Z0-9]+'), "Slack user token"),
     (re.compile(r'ya29\.[A-Za-z0-9._-]{50,}'), "Google OAuth token"),

@@ -159,9 +159,25 @@ def _z_paths(args: list[str], repo: Path) -> list[str]:
     return [path for path in out.split("\0") if path]
 
 
-def _push_delta_files(repo: Path) -> set[str]:
+def _push_delta_files(repo: Path, *, will_commit: bool = True) -> set[str]:
     """Files about to be pushed: the committed-but-unpushed delta, staged and
     unstaged tracked edits, and every untracked file git is not ignoring.
+
+    `will_commit=False` is `--no-commit`, and it drops the last three legs. They
+    are here because step 3 runs `git add -A`, so a file merely sitting in the
+    worktree at scan time is inside the commit a moment later; `--no-commit`
+    runs no staging step at all, and a file that is not already in a commit
+    cannot reach the remote on that invocation. Scanning it there is not extra
+    safety, it is a refusal over bytes the run would not carry.
+
+    MEASURED 2026-09-05: a `push-all.py` the operator asked for refused over two
+    UNTRACKED files belonging to another task, with `--no-commit --dry-run`
+    giving the identical findings and the identical sentence, "secret-like
+    CONTENT in a file about to be pushed". The narrowing is safe BECAUSE of the
+    staging command and not because untracked files are harmless;
+    `tests/test_a_wall_that_scanned_what_this_push_would_not_carry.py` holds
+    that dependency in the open so a staging step added to the `--no-commit`
+    path fails there rather than opening a hole here.
 
     The untracked leg was missing until 2026-08-23, and the gap was structural
     rather than incidental. `engine_content_scan` runs at step 0 of `push_repo`,
@@ -225,23 +241,36 @@ def _push_delta_files(repo: Path) -> set[str]:
         # gap was rated unreachable; a content wall that relies on another
         # rule holding is a wall with a hole in it, and widening a filter can
         # only ever add files to the scan.
-        for args in (
+        legs = [
             ["git", "diff", "-z", "--no-renames", "--name-only",
              "--diff-filter=ACMT", "origin/main..HEAD"],
-            ["git", "diff", "-z", "--cached", "--no-renames", "--name-only",
-             "--diff-filter=ACMT"],
-            ["git", "diff", "-z", "--no-renames", "--name-only",
-             "--diff-filter=ACMT"],
-        ):
+        ]
+        if will_commit:
+            legs += [
+                ["git", "diff", "-z", "--cached", "--no-renames", "--name-only",
+                 "--diff-filter=ACMT"],
+                ["git", "diff", "-z", "--no-renames", "--name-only",
+                 "--diff-filter=ACMT"],
+            ]
+        for args in legs:
             files.update(_z_paths(args, repo))
+    elif not will_commit and have_head:
+        # No `origin/main`: the push carries the whole history, so the delta is
+        # everything COMMITTED. Tracked-only, because nothing will be staged.
+        files.update(_z_paths(["git", "ls-files", "-z"], repo))
+    elif not will_commit:
+        # No HEAD and nothing to commit: this invocation can push nothing.
+        return set()
     else:
         # No base, or no HEAD: the index IS the whole delta. `git ls-files`
         # works against an unborn HEAD and lists everything staged, so this
         # branch loses no coverage in either case.
         files.update(_z_paths(["git", "ls-files", "-z"], repo))
-    files.update(
-        _z_paths(["git", "ls-files", "-z", "--others", "--exclude-standard"], repo)
-    )
+    if will_commit:
+        files.update(
+            _z_paths(["git", "ls-files", "-z", "--others", "--exclude-standard"],
+                     repo)
+        )
     return {f for f in files if f}
 
 
@@ -303,7 +332,7 @@ def _refuse_on_scanner(proc, where: str) -> None:
         sys.exit(2)
 
 
-def content_scan(repo: Path) -> None:
+def content_scan(repo: Path, *, will_commit: bool = True) -> None:
     """Scan the contents of everything about to be pushed. Refuse on any hit.
 
     TWO WORLDS, because a push sends both. The working tree and index are what
@@ -328,7 +357,7 @@ def content_scan(repo: Path) -> None:
     nothing about an uncommitted edit, and the working tree says nothing about a
     commit already made.
     """
-    files = _push_delta_files(repo)
+    files = _push_delta_files(repo, will_commit=will_commit)
     if files:
         _refuse_on_scanner(
             _run_scanner(files, repo, f"push:{repo.name}"),
@@ -458,7 +487,8 @@ def engine_clean_scan(repo: Path) -> None:
         sys.exit(2)
 
 
-def engine_content_scan(repo: Path, data_root: Path) -> None:
+def engine_content_scan(repo: Path, data_root: Path, *,
+                        will_commit: bool = True) -> None:
     """UNBYPASSABLE engine CONTENT-leak gate (engine only).
 
     The content sibling of engine_clean_scan() (routing) and content_scan()
@@ -523,7 +553,8 @@ def engine_content_scan(repo: Path, data_root: Path) -> None:
             findings.append((label, lineno, matched, category))
 
     gone: list[str] = []
-    for rel in engine_text_files(repo, sorted(_push_delta_files(repo))):
+    for rel in engine_text_files(
+            repo, sorted(_push_delta_files(repo, will_commit=will_commit))):
         try:
             text = (repo / rel).read_text(encoding="utf-8")
         except FileNotFoundError:
@@ -750,12 +781,12 @@ def push_repo(name: str, repo: Path, message: str, do_commit: bool, dry_run: boo
     #
     # No coverage is lost by moving it: `_push_delta_files` includes untracked
     # files, so the set here is the same one the commit is about to create.
-    content_scan(repo)
+    content_scan(repo, will_commit=do_commit)
 
     if is_engine:
         engine_clean_scan(repo)
         if data_root is not None:
-            engine_content_scan(repo, data_root)
+            engine_content_scan(repo, data_root, will_commit=do_commit)
 
     # 1. pre-push secret scan over every file this push would CARRY
     #

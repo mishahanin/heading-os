@@ -660,7 +660,14 @@ def test_every_history_wall_refuses_when_git_cannot_answer(
     # Read the arity off the live signature rather than hard-coding it, so a
     # wall that gains a parameter fails here as a TypeError naming the wall
     # instead of quietly dropping out of the table.
-    args = tuple(repo for _ in inspect.signature(fn).parameters)
+    # POSITIONAL parameters only. A keyword-only parameter with a default is
+    # not part of the arity this line means, and counting one made this pass
+    # three positionals to `engine_content_scan` the day it gained
+    # `*, will_commit` (2026-09-05) and fail with an arity error about a
+    # signature that was fine.
+    args = tuple(repo for name, param in inspect.signature(fn).parameters.items()
+                 if param.kind in (param.POSITIONAL_ONLY,
+                                   param.POSITIONAL_OR_KEYWORD))
     monkeypatch.setattr(push_all, enumerator, boom)
     refused, code = _refuses(fn, *args)
     assert refused and code == "2", (
@@ -821,7 +828,7 @@ def test_no_wall_reads_only_the_present(repo: Path, monkeypatch) -> None:
 
     monkeypatch.setattr(push_all, "unpushed_blobs", spy_blobs)
     monkeypatch.setattr(push_all, "unpushed_paths", spy_paths)
-    monkeypatch.setattr(push_all, "_push_delta_files", lambda _r: set())
+    monkeypatch.setattr(push_all, "_push_delta_files", lambda _r, **_k: set())
 
     class FakeDenylist:
         degraded = False

@@ -182,7 +182,7 @@ def test_an_untracked_memory_index_is_refused(tmp_path, capsys, monkeypatch):
     """
     repo = _repo(tmp_path)
     _write(repo, ".memory-index/index.db", "blob\n")   # never added
-    monkeypatch.setattr(push_all, "content_scan", lambda _r: None)
+    monkeypatch.setattr(push_all, "content_scan", lambda _r, **_k: None)
     monkeypatch.setattr(push_all, "log_denial", lambda **_k: None)
 
     with pytest.raises(SystemExit) as exc:
@@ -197,7 +197,7 @@ def test_a_tracked_memory_index_is_still_refused(tmp_path, capsys, monkeypatch):
     repo = _repo(tmp_path)
     _write(repo, ".memory-index/index.db", "blob\n")
     _git(repo, "add", "-f", ".memory-index/index.db")
-    monkeypatch.setattr(push_all, "content_scan", lambda _r: None)
+    monkeypatch.setattr(push_all, "content_scan", lambda _r, **_k: None)
     monkeypatch.setattr(push_all, "log_denial", lambda **_k: None)
 
     with pytest.raises(SystemExit) as exc:
@@ -216,7 +216,7 @@ def test_a_tree_with_no_index_passes_both_steps(tmp_path, monkeypatch):
     # two steps under test.
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "base")
-    monkeypatch.setattr(push_all, "content_scan", lambda _r: None)
+    monkeypatch.setattr(push_all, "content_scan", lambda _r, **_k: None)
     monkeypatch.setattr(push_all, "log_denial", lambda **_k: None)
 
     # `push_repo` refuses further down (no remote, no armed gate); the point is
@@ -233,7 +233,7 @@ def test_an_untracked_credential_is_refused_through_push_repo(tmp_path, capsys,
     this proves `push_repo` acts on it."""
     repo = _repo(tmp_path)
     _write(repo, "telegram.session", "AUTH-TOKEN\n")   # never added
-    monkeypatch.setattr(push_all, "content_scan", lambda _r: None)
+    monkeypatch.setattr(push_all, "content_scan", lambda _r, **_k: None)
     monkeypatch.setattr(push_all, "log_denial", lambda **_k: None)
 
     with pytest.raises(SystemExit) as exc:
@@ -364,7 +364,8 @@ def test_a_secret_in_content_refuses_before_anything_is_committed(tmp_path, monk
             "and cannot stand in for a text-mode call")
         return subprocess.CompletedProcess(args, 1, b"hit", b"")
 
-    monkeypatch.setattr(push_all, "_push_delta_files", lambda _r: {"scripts/leak.py"})
+    monkeypatch.setattr(push_all, "_push_delta_files",
+                        lambda _r, **_k: {"scripts/leak.py"})
     monkeypatch.setattr(push_all.subprocess, "run", _refusing_scanner)
 
     with pytest.raises(SystemExit) as exc:

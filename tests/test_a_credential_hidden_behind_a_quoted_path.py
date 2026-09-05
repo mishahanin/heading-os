@@ -233,7 +233,7 @@ def test_a_clean_repo_records_no_refusal(tmp_path, no_denial_log, monkeypatch):
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "base")
     monkeypatch.setattr(push_all, "content_scan",
-                        lambda _r: (_ for _ in ()).throw(RuntimeError("reached step 3.5")))
+                        lambda _r, **_k: (_ for _ in ()).throw(RuntimeError("reached step 3.5")))
     with pytest.raises(RuntimeError, match="step 3.5"):
         _step_one(repo)
 
@@ -259,7 +259,7 @@ def test_an_example_file_is_still_allowed(tmp_path, no_denial_log, monkeypatch):
     _git(repo, "commit", "-qm", "base")
     # Stop the run right after step 2; steps 3+ commit, scan and push.
     monkeypatch.setattr(push_all, "content_scan",
-                        lambda _r: (_ for _ in ()).throw(RuntimeError("reached step 3.5")))
+                        lambda _r, **_k: (_ for _ in ()).throw(RuntimeError("reached step 3.5")))
     with pytest.raises(RuntimeError, match="step 3.5"):
         _step_one(repo)
 
@@ -272,7 +272,7 @@ def test_a_cyrillic_named_ordinary_file_is_not_refused(tmp_path, no_denial_log,
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "base")
     monkeypatch.setattr(push_all, "content_scan",
-                        lambda _r: (_ for _ in ()).throw(RuntimeError("reached step 3.5")))
+                        lambda _r, **_k: (_ for _ in ()).throw(RuntimeError("reached step 3.5")))
     with pytest.raises(RuntimeError, match="step 3.5"):
         _step_one(repo)
 

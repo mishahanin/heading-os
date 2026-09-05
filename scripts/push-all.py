@@ -322,14 +322,59 @@ def _run_scanner(paths, cwd: Path, context: str, extra_env=None):
         sys.exit(2)
 
 
-def _refuse_on_scanner(proc, where: str) -> None:
+def _refuse_on_scanner(proc, where: str, composition: str = "") -> None:
     if proc.returncode != 0:
         sys.stdout.write(proc.stdout)
         sys.stderr.write(proc.stderr)
         reason = f"secret-like CONTENT in {where}" if proc.returncode == 1 \
             else "secret-scanner error"
         print(f"{RED}REFUSING TO PUSH — {reason}.{RESET}")
+        if composition:
+            print(composition)
         sys.exit(2)
+
+
+def _scan_set_composition(repo: Path, *, will_commit: bool) -> str:
+    """One line naming what the refused scan set was made of, by git state.
+
+    `.claude/rules/scope-claims.md`, in the wall that rule most protects. The
+    refusal above names a FILE and asserts it is "about to be pushed". In the
+    default mode that is true of all four legs, because step 3 runs
+    `git add -A`; the operator still cannot tell from the sentence whether the
+    offending bytes are already in a commit or are an untracked scratch file
+    that this run is about to sweep in, and those call for different responses.
+
+    MEASURED 2026-09-05: a refusal named two untracked files under another
+    task's output directory and said only "a file about to be pushed", and
+    reading the state took three git commands by hand while the push was
+    blocked. Counts, not paths, because the scanner has already printed the
+    paths that matter and a second full listing buries them.
+    """
+    def count(args: list[str]) -> int:
+        return len({p for p in _z_paths(args, repo) if p})
+
+    have_base = run(
+        ["git", "rev-parse", "--verify", "-q", "origin/main"], repo, check=False
+    ).returncode == 0
+    have_head = run(
+        ["git", "rev-parse", "--verify", "-q", "HEAD"], repo, check=False
+    ).returncode == 0
+
+    parts = []
+    if have_base and have_head:
+        parts.append(f"{count(['git', 'diff', '-z', '--no-renames', '--name-only', '--diff-filter=ACMT', 'origin/main..HEAD'])} committed-unpushed")
+    elif have_head:
+        parts.append(f"{count(['git', 'ls-files', '-z'])} tracked (no origin/main: the push carries the whole history)")
+    if will_commit:
+        parts.append(f"{count(['git', 'diff', '-z', '--cached', '--no-renames', '--name-only', '--diff-filter=ACMT'])} staged")
+        parts.append(f"{count(['git', 'diff', '-z', '--no-renames', '--name-only', '--diff-filter=ACMT'])} unstaged")
+        parts.append(f"{count(['git', 'ls-files', '-z', '--others', '--exclude-standard'])} untracked")
+        tail = ("the last three legs are here because step 3 runs `git add -A`, "
+                "so they are in the commit a moment later")
+    else:
+        tail = ("--no-commit stages nothing, so the committed delta is the whole "
+                "set this run can push")
+    return f"  scanned set: {', '.join(parts)} — {tail}."
 
 
 def content_scan(repo: Path, *, will_commit: bool = True) -> None:
@@ -361,7 +406,8 @@ def content_scan(repo: Path, *, will_commit: bool = True) -> None:
     if files:
         _refuse_on_scanner(
             _run_scanner(files, repo, f"push:{repo.name}"),
-            "a file about to be pushed")
+            "a file about to be pushed",
+            _scan_set_composition(repo, will_commit=will_commit))
     history_content_scan(repo)
 
 

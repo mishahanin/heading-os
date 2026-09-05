@@ -227,6 +227,35 @@ def test_systemd_not_knowing_the_unit_is_its_own_failure(helm):
     assert "does not know" in result.stderr
 
 
+def test_not_found_beside_no_unit_file_does_not_claim_the_file_is_on_disk(helm):
+    """The missing case. MEASURED 2026-09-05 in HELM before the install:
+
+        [MISSING] not installed: ...nightly-refresh.timer does not exist.
+        [FAIL] mechanism 2/3  INSTALLED BUT NOT ENABLED: systemctl --user
+               is-enabled reports 'not-found'. The unit file is on disk
+
+    Two lines, contradicting each other, in the one window this branch is
+    reachable. `not-found` is systemd saying it has no such unit, which is the
+    single state "installed but not enabled" cannot mean.
+
+    The other twelve cases in this file passed over it because none of them ran
+    `is-enabled` with a value that was neither `enabled`, `disabled` nor empty.
+    No unit is installed here on purpose: that is the state the operator is in
+    when they run `--check` to find out whether to install.
+    """
+    result = _check(helm, is_enabled="not-found")
+
+    assert result.returncode == 1
+    assert "[MISSING]" in result.stderr, (
+        f"the absent unit file was not reported:\n{result.stderr}")
+    assert "INSTALLED BUT NOT ENABLED" not in result.stderr, (
+        f"'not-found' was routed into the installed-but-disabled branch, so the "
+        f"check asserts a file it has just said does not exist:\n{result.stderr}")
+    assert "on disk" not in result.stderr, (
+        f"the check still claims the unit file is on disk:\n{result.stderr}")
+    assert "does not know" in result.stderr
+
+
 def test_a_rendered_timer_without_persistent_fails_naming_mechanism_one(helm):
     """Mechanism 1, held alone: enabled, lingering, and still not reboot-safe."""
     text = _render((TEMPLATES / "nightly-refresh.timer").read_text(encoding="utf-8"),

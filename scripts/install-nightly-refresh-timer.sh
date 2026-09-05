@@ -113,11 +113,19 @@ if [[ "${1:-}" == "--check" || "${1:-}" == "check" ]]; then
     fi
 
     # Mechanism 2: enabled, and INSTALLED-BUT-DISABLED named as its own state.
+    #
+    # `not-found` belongs HERE, with "systemd does not know it", and not with
+    # the disabled branch below, which is the one state it cannot mean. Routing
+    # it there made `--check` print "The unit file is on disk" one line under
+    # "[MISSING] ... does not exist". MEASURED 2026-09-05 in HELM, in the only
+    # window the branch is reachable: before the unit was installed.
     enabled_state="$(systemctl --user is-enabled "$UNIT_NAME.timer" 2>/dev/null || true)"
     if [[ "$enabled_state" == "enabled" ]]; then
         echo "  [ok] mechanism 2/3  systemctl --user is-enabled: enabled"
-    elif [[ -z "$enabled_state" ]]; then
-        echo "  [FAIL] mechanism 2/3  systemd does not know $UNIT_NAME.timer at all." >&2
+    elif [[ -z "$enabled_state" || "$enabled_state" == "not-found" ]]; then
+        echo "  [FAIL] mechanism 2/3  systemd does not know $UNIT_NAME.timer at all" >&2
+        echo "         (is-enabled said '${enabled_state:-nothing}')." >&2
+        echo "         Install it:  bash scripts/install-$UNIT_NAME-timer.sh" >&2
         failed=1
     else
         echo "  [FAIL] mechanism 2/3  INSTALLED BUT NOT ENABLED: systemctl --user" >&2

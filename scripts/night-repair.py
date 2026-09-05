@@ -5,7 +5,7 @@ Usage:
     python scripts/night-repair.py --status
     python scripts/night-repair.py --approve            # everything open
     python scripts/night-repair.py --approve --max-minutes 180
-    python scripts/night-repair.py --run                # the timer calls this
+    python scripts/night-repair.py --run                # started by hand
 
 What runs at night, and what cannot
 -----------------------------------
@@ -299,7 +299,8 @@ def main() -> int:
     ap.add_argument("--max-minutes", type=int, default=None,
                     help="time budget for the batch")
     ap.add_argument("--run", action="store_true",
-                    help="run the approved batch; the timer calls this")
+                    help="run the approved batch (started by hand; nothing "
+                         "schedules this)")
     ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_S)
     args = ap.parse_args()
 

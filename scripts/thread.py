@@ -82,12 +82,19 @@ def _append_under_section(body: str, section_header: str, new_line: str) -> str:
     section_start = m.end()
     next_h2 = re.search(r"^## ", body[section_start:], flags=re.MULTILINE)
     section_end = section_start + (next_h2.start() if next_h2 else len(body) - section_start)
-    section_body = body[section_start:section_end].rstrip("\n")
-    # Leading "\n" is mandatory; without it, an empty section concatenates the
-    # header and item ("## Header- [ ] item"), which breaks the next match.
+    # `strip`, not `rstrip`. `section_start` is `m.end()`, the position BEFORE
+    # the header's own newline, so this slice ALWAYS begins with "\n". Stripping
+    # only the tail left that leading newline in place and the "\n" prepended
+    # below added a second one, so every append grew the gap by a line: measured
+    # 2026-09-05, four appends produced three blank lines under the heading.
+    section_body = body[section_start:section_end].strip("\n")
+    # "\n\n", not "\n": one newline ends the header's own line, the second is
+    # the blank line markdown wants under a heading. At least the first is
+    # mandatory, because without it an empty section concatenates into
+    # "## Header- [ ] item" and the next `^## ` match never finds it again.
     return (
         body[:section_start]
-        + "\n"
+        + "\n\n"
         + (section_body + "\n" if section_body else "")
         + new_line
         + "\n\n"
@@ -104,7 +111,14 @@ def _prepend_log_entry(body: str, entry: str) -> str:
         body = _append_under_section(body, "## Log (newest first)", "")
         m = log_marker_re.search(body)
     insert_at = m.end()
-    return body[:insert_at] + "\n\n" + entry.rstrip("\n") + "\n" + body[insert_at:].lstrip("\n")
+    rest = body[insert_at:].lstrip("\n")
+    # A single "\n" here butted the newest entry straight against whatever came
+    # next, so a log followed by "## Notes" rendered as "- entry\n## Notes"
+    # (measured 2026-09-05). The separator is conditional rather than always
+    # doubled: with nothing following, "\n\n" would leave a blank line at end of
+    # file, which is the shape every thread has on the day it is opened.
+    return (body[:insert_at] + "\n\n" + entry.rstrip("\n")
+            + ("\n\n" if rest else "\n") + rest)
 
 
 FOLLOWUPS_HEADER = "## Open follow-ups"

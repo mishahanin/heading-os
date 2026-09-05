@@ -251,8 +251,16 @@ def test_the_lock_sidecar_cannot_reach_a_commit(tmp_path):
             "the slug must flatten the path, or a nested directory has to exist "
             "before the lock can be taken")
 
+    # Asked about the LOCK PATH, not about `.tmp`. MEASURED 2026-09-05 in a
+    # throwaway repo carrying only `.tmp/`: `git check-ignore .tmp` exits 1
+    # when the directory does not exist on disk and 0 once it does, because a
+    # trailing-slash pattern matches a path git can see is a directory. This
+    # tree happens to have `.tmp/`, so the old assertion passed here and would
+    # have gone red on a fresh clone for a reason that has nothing to do with
+    # the invariant. A file INSIDE the directory is matched either way.
     ignored = subprocess.run(
-        ["git", "check-ignore", "-q", ".tmp"], cwd=ROOT,
+        ["git", "check-ignore", "-q",
+         ".tmp/mutation-locks/scripts__utils__workspace.py.lock"], cwd=ROOT,
         capture_output=True, text=True)
     assert ignored.returncode == 0, (
         ".tmp/ is no longer gitignored, so every mutation lock is one "

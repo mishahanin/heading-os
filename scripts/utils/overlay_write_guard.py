@@ -68,9 +68,16 @@ import contextlib
 # Each exclusion needs a reason, and "it was noisy" is not one. A rebuildable
 # index or a credential file that a daemon refreshes is genuinely not the
 # operator's data; an output, a CRM record or a thread is.
+#
+# REBUILDABLE is the ground for the two memory indexes, and it is the only one.
+# Until 2026-09-05 the reason beside them said "a live file watcher", which no
+# process provides: measured that day, the only index watcher on this machine
+# is CodeGraph's, and `.memory-index*` are rebuilt by a command someone runs.
+# The exclusions were right and the reason was not, which is worse than a wrong
+# exclusion, because the reason is what the next person reasons from.
 _UNWATCHED = {
     ".git": "git's own object store, rewritten by any git command",
-    ".memory-index": "a rebuildable search index with a live file watcher",
+    ".memory-index": "a rebuildable search index; nothing watches it, it is rebuilt on demand",
     ".memory-index-code": "the same, for code",
     ".codegraph": "the CodeGraph index, rebuilt by its own watcher",
     ".sessions": "runtime credentials refreshed by the daemons",

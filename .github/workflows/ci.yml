@@ -134,7 +134,48 @@ jobs:
       - name: Version sync (F-1.1)
         run: uv run python scripts/check-version-sync.py --quiet
       - name: detect-secrets baseline drift (F-9.4)
-        run: uv run detect-secrets scan --baseline .secrets.baseline
+        # `scan --baseline` REWRITES the baseline in place and exits 0 whatever
+        # it finds, so this step was named for a drift it could not detect: a
+        # new secret updated the file and the job stayed green.
+        #
+        # `git diff --exit-code` is NOT the fix and was tried first. MEASURED
+        # 2026-09-05: two consecutive scans of an unchanged tree differ, because
+        # `generated_at` is stamped on every run. That gate would have failed
+        # every build forever, which is a gate nobody keeps.
+        #
+        # So the comparison is over `results` alone, and the scan writes to a
+        # COPY: a step that rewrites a tracked file leaves the checkout dirty
+        # for everything after it. `results` is the right key to compare because
+        # the baseline's self-reference lives in `filters_used`, which changes
+        # with the copy's path and would otherwise differ on every run.
+        #
+        # Both halves MEASURED 2026-09-05 against the refreshed baseline: an
+        # unchanged tree passes, and a 64-hex literal planted in a new file
+        # fails with that file named. The planted file had to be `git add -N`'d
+        # first, because detect-secrets walks the git index and an UNTRACKED
+        # file is invisible to it. That costs nothing here (a checkout tracks
+        # everything) but it is why this gate is not the one that catches a
+        # secret in a scratch file; the push wall's content scan is.
+        run: |
+          cp .secrets.baseline "$RUNNER_TEMP/baseline.new"
+          uv run detect-secrets scan --baseline "$RUNNER_TEMP/baseline.new"
+          uv run python -c '
+          import json, os, sys
+          old = json.load(open(".secrets.baseline"))["results"]
+          new = json.load(open(os.environ["RUNNER_TEMP"] + "/baseline.new"))["results"]
+          if old == new:
+              sys.exit(0)
+          added = {f: new[f] for f in new if f not in old or new[f] != old[f]}
+          gone = [f for f in old if f not in new]
+          print("detect-secrets baseline is out of date.")
+          for f in sorted(added):
+              print(f"  new or changed findings in {f}")
+          for f in sorted(gone):
+              print(f"  findings gone from {f}")
+          print("Review each, then refresh with:")
+          print("  detect-secrets scan --baseline .secrets.baseline")
+          sys.exit(1)
+          '
       - name: Vendored-skill hashes (F-9.5)
         run: uv run python scripts/verify-skills-lock.py --check
       - name: Skill bash-path audit (F-9.3)

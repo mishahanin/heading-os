@@ -78,14 +78,30 @@ _CLONE_FILES = (
     GATE_REL,
     "scripts/__init__.py",
     "scripts/utils/__init__.py",
+    "scripts/utils/checkpoint_paths.py",
     "scripts/utils/clone_guard.py",
     "scripts/utils/colors.py",
     "scripts/utils/pathnorm.py",
 )
 
+# `workspace list` as well as `agent prompt`, since 2026-09-06: the sender maps
+# the pane to a checkout before it sends anything, and verifies afterwards that
+# the text reached THAT checkout's transcript. A stub that only recorded argv
+# would exercise a sender that no longer exists.
+#
+# Writing the payload into the transcript is the stub standing in for a correct
+# delivery. The misdelivery direction has its own file,
+# `tests/test_a_brief_that_herdr_said_it_delivered_somewhere_else.py`.
 _HERDR_STUB = """\
 #!/usr/bin/env bash
+if [ "$1" = "workspace" ]; then
+  printf '{"result":{"workspaces":[{"workspace_id":"w37","worktree":{"checkout_path":"%s"}}]}}\\n' "$STUB_CHECKOUT"
+  exit 0
+fi
 for a in "$@"; do printf '%s\\0' "$a" >> "$STUB_ARGV"; done
+if [ -n "$STUB_TRANSCRIPT" ] && [ "${HERDR_EXIT:-0}" = "0" ]; then
+  printf '%s' "$4" >> "$STUB_TRANSCRIPT"
+fi
 printf '{"type":"agent_prompted"}\\n'
 exit "${HERDR_EXIT:-0}"
 """
@@ -184,7 +200,8 @@ def helm(tmp_path_factory) -> dict:
     stub = binstub / "herdr"
     stub.write_text(_HERDR_STUB, encoding="utf-8")
     stub.chmod(0o755)
-    return {"clone": clone, "bin": binstub, "argv": base / "argv.bin"}
+    return {"clone": clone, "bin": binstub, "argv": base / "argv.bin",
+            **_delivery_fixture(base, clone)}
 
 
 @pytest.fixture(scope="module")
@@ -216,7 +233,28 @@ def yard(tmp_path_factory) -> dict:
     stub = binstub / "herdr"
     stub.write_text(_HERDR_STUB, encoding="utf-8")
     stub.chmod(0o755)
-    return {"clone": tree, "bin": binstub, "argv": base / "argv.bin"}
+    return {"clone": tree, "bin": binstub, "argv": base / "argv.bin",
+            **_delivery_fixture(base, tree)}
+
+
+def _delivery_fixture(base: Path, checkout: Path) -> dict:
+    """The transcript tree the sender's two delivery checks read.
+
+    The directory NAME comes from `checkpoint_paths.transcript_dir`, the one
+    owner of that rule, so this fixture cannot pass against a mangle the real
+    run does not perform. Only the ROOT is relocated, which is what
+    `--projects-root` is for.
+    """
+    from scripts.utils.checkpoint_paths import transcript_dir
+
+    projects = base / "projects"
+    owned = transcript_dir(checkout)
+    target = projects / owned.name
+    target.mkdir(parents=True, exist_ok=True)
+    # A pane with no session is refused, so the fixture gives it one.
+    session = target / "session.jsonl"
+    session.write_text('{"type":"user"}\n', encoding="utf-8")
+    return {"projects": projects, "transcript": session}
 
 
 def _populate(checkout: Path) -> None:
@@ -231,8 +269,11 @@ def _run_sender(env_home: dict, *args: str) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["PATH"] = f"{env_home['bin']}{os.pathsep}{env['PATH']}"
     env["STUB_ARGV"] = str(env_home["argv"])
+    env["STUB_CHECKOUT"] = str(env_home["clone"])
+    env["STUB_TRANSCRIPT"] = str(env_home["transcript"])
     return subprocess.run(
-        [sys.executable, str(env_home["clone"] / SENDER_REL), *args],
+        [sys.executable, str(env_home["clone"] / SENDER_REL), *args,
+         "--projects-root", str(env_home["projects"])],
         capture_output=True, text=True, check=False, env=env,
         cwd=str(env_home["clone"]))
 
@@ -383,7 +424,16 @@ def test_the_sender_prepends_the_marker_and_delegates(helm):
     assert len(argv) == 4, argv
     sent = argv[3]
     assert sent.startswith(EXPECTED_MARKER + "\n"), repr(sent[:120])
-    assert sent.endswith("TASK FROM HELM. Do the thing.")
+    # The body is followed by the per-send id line the delivery check looks for
+    # in the addressed session's transcript (added 2026-09-06). The body itself
+    # must still be verbatim and unwrapped, so this asserts on the whole tail
+    # rather than loosening to a containment check.
+    body = "TASK FROM HELM. Do the thing."
+    assert body in sent
+    tail = sent.split(body, 1)[1]
+    assert tail.strip().startswith("X-HEADING-BRIEF-ID: "), repr(tail[:80])
+    assert tail.count("\n") <= 3, (
+        f"more than the id line follows the brief: {tail!r}")
 
 
 def test_the_sender_prints_what_it_is_about_to_send(helm):

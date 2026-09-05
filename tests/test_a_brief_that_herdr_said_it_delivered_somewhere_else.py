@@ -63,32 +63,46 @@ def brief():
 # The slug: a wrong one makes every check below look at the wrong tree
 # ============================================================
 
-@pytest.mark.parametrize("checkout,slug", [
-    ("/home/administrator/ai/claude-workspaces/.heading-os",
-     "-home-administrator-ai-claude-workspaces--heading-os"),
-    ("/home/administrator/ai/claude-workspaces/.yard/.heading-os/yard-x",
-     "-home-administrator-ai-claude-workspaces--yard--heading-os-yard-x"),
-])
-def test_the_project_slug_matches_what_the_harness_actually_writes(
-        brief, checkout, slug):
-    """Both mappings VERIFIED against the live tree 2026-09-06.
+def test_the_target_directory_comes_from_the_shared_owner(brief):
+    """The slug rule has ONE owner and this script is not it.
 
-    A slug that is merely plausible would send every check below to a directory
-    that does not exist, where `transcripts()` returns empty and the pre-flight
-    refuses every send. The guard would then look strict and be blind.
+    The first version of this file spelled the two-replacement mangle again.
+    `tests/test_transcript_dir_has_one_owner.py` caught it IN THE PUSH GATE on
+    2026-09-06, which is obligation 3 of the development standards working as
+    designed: a fix that lands in one of N copies is this repository's dominant
+    defect shape, and the copy never reached anyone.
     """
-    assert brief.project_slug(Path(checkout)) == slug
+    from scripts.utils.checkpoint_paths import transcript_dir
+
+    assert brief.target_dir(ROOT, None) == transcript_dir(ROOT), (
+        "herdr-brief no longer resolves the transcript directory through "
+        "checkpoint_paths.transcript_dir, so the rule now has two homes")
 
 
-def test_the_slug_of_a_real_checkout_resolves_to_a_real_directory(brief):
-    """The floor, against the pair above rotting into a private convention."""
-    root = Path.home() / ".claude" / "projects"
-    if not root.is_dir():
+def test_a_fixture_root_relocates_only_the_root(brief, tmp_path):
+    """`--projects-root` must not become a second slug rule either.
+
+    The directory NAME still comes from the owner; only the parent moves. A
+    test that could choose its own name would pass against a mangle the real
+    run never performs.
+    """
+    from scripts.utils.checkpoint_paths import transcript_dir
+
+    relocated = brief.target_dir(ROOT, tmp_path)
+    assert relocated.parent == tmp_path
+    assert relocated.name == transcript_dir(ROOT).name
+
+
+def test_the_real_checkout_resolves_to_a_real_directory(brief):
+    """The floor: the owner's rule still matches what the harness writes."""
+    resolved = brief.target_dir(ROOT, None)
+    if resolved is None:
+        pytest.skip("transcript_dir declines off POSIX")
+    if not resolved.parent.is_dir():
         pytest.skip("no Claude projects directory on this machine")
-    engine = brief.project_slug(ROOT)
-    assert (root / engine).is_dir(), (
-        f"the engine checkout's own transcripts are not under {root / engine}; "
-        f"the slug rule has drifted from what the harness writes")
+    assert resolved.is_dir(), (
+        f"the engine checkout's own transcripts are not under {resolved}; the "
+        f"slug rule has drifted from what the harness writes")
 
 
 # ============================================================

@@ -97,6 +97,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.utils.checkpoint_paths import transcript_dir  # noqa: E402
 from scripts.utils.clone_guard import require_main_clone  # noqa: E402
 from scripts.utils.colors import CYAN, GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
 
@@ -116,7 +117,6 @@ DELIVERY_POLL = 1.0
 
 ROOT = Path(__file__).resolve().parent.parent
 GATE = ROOT / ".claude" / "hooks" / "_dispatch.py"
-PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 
 BRIEF_ID_PREFIX = "X-HEADING-BRIEF-ID: "
 
@@ -144,21 +144,26 @@ def compose(marker: str, text: str) -> str:
     return f"{marker}\n\n{text}"
 
 
-def project_slug(checkout: Path) -> str:
-    """The directory Claude Code writes a checkout's transcripts under.
+def target_dir(checkout: Path, projects_root: Path | None) -> Path | None:
+    """Where Claude Code keeps that checkout's transcripts.
 
-    Every `/` and every `.` in the absolute path becomes `-`. Verified against
-    the two live mappings on this machine 2026-09-06:
+    The slug rule is NOT reimplemented here. `checkpoint_paths.transcript_dir`
+    owns it, and `tests/test_transcript_dir_has_one_owner.py` fails any second
+    copy of the two-replacement mangle in `scripts/**` — it caught this file
+    doing exactly that on 2026-09-06, in the push gate, before the copy could
+    reach anyone. Fixing at the shared root is obligation 3 of
+    `.claude/rules/development-standards.md` and this repository's dominant
+    defect shape.
 
-        /home/administrator/ai/claude-workspaces/.heading-os
-          -> -home-administrator-ai-claude-workspaces--heading-os
-        /home/administrator/ai/claude-workspaces/.yard/.heading-os/yard-x
-          -> -home-administrator-ai-claude-workspaces--yard--heading-os-yard-x
-
-    A leading `/` produces the leading `-`, and a dot-directory produces the
-    doubled one, which is why the rule is not "replace the separators".
+    `projects_root` relocates only the ROOT, for a fixture tree; the directory
+    NAME still comes from the owner, so a test cannot pass against a rule the
+    real run does not use. None when the owner declines, which it does off
+    POSIX rather than guessing a slug it cannot verify.
     """
-    return str(checkout).replace("/", "-").replace(".", "-")
+    owned = transcript_dir(checkout)
+    if owned is None:
+        return None
+    return (projects_root / owned.name) if projects_root else owned
 
 
 def checkout_for_pane(pane: str, workspaces: list) -> Path | None:
@@ -342,8 +347,9 @@ def main() -> int:
             file=sys.stderr)
         return 2
 
-    projects_root = Path(args.projects_root) if args.projects_root \
-        else PROJECTS_ROOT
+    # None, not a default: the owner resolves the whole path, and only a
+    # fixture relocates the root.
+    projects_root = Path(args.projects_root) if args.projects_root else None
 
     checkout = checkout_for_pane(args.pane, herdr_workspaces())
     if checkout is None:
@@ -351,7 +357,14 @@ def main() -> int:
               f"owning {args.pane}, so there is no checkout to verify delivery "
               f"against.{RESET}", file=sys.stderr)
         return 5
-    target = projects_root / project_slug(checkout)
+    target = target_dir(checkout, projects_root)
+    if target is None:
+        print(f"{RED}herdr-brief: REFUSED. The transcript directory for "
+              f"{checkout} cannot be resolved on this platform, so delivery "
+              f"cannot be verified and herdr's reply is the only evidence "
+              f"there would be. That is what this script exists not to "
+              f"trust.{RESET}", file=sys.stderr)
+        return 5
 
     # The pre-flight. MEASURED twice, 2026-09-05 and 2026-09-06: both
     # misdeliveries were to a pane whose session had never started, and both
@@ -381,7 +394,7 @@ def main() -> int:
         return status
 
     print(f"{YELLOW}Verifying delivery in {target.name} ...{RESET}")
-    return verify_delivery(target, brief_id, projects_root)
+    return verify_delivery(target, brief_id, projects_root or target.parent)
 
 
 if __name__ == "__main__":

@@ -158,9 +158,12 @@ uv run python scripts/run-tests.py                      # the suite
 
 `ruff` (the linter) and the secret scan run automatically through `pre-commit`. Then:
 
-- **The pre-push gate.** `push-all.py` runs the full regression suite (parallelized
-  with `pytest-xdist`) before a push is allowed, plus the unbypassable secret content
-  scan. Budget time for it; do not work around it.
+- **The pre-push gate.** The pre-push hook runs the tests this push can reach, not
+  the whole suite. It reads git's ref lines from stdin and asks
+  `scripts/utils/prepush_gate.py` which tests the pushed range reaches. On any doubt
+  it runs everything and prints the reason. `push-all.py` runs the unbypassable
+  secret content scan separately, before pytest and independently of it. CI runs the
+  whole suite on every push. Do not work around either.
 - **The data overlay's own gate.** A data overlay that carries a `tests/` directory
   gets its own pre-push hook, which runs those tests and then hands off to git-lfs.
   Arm both repositories with `uv run python scripts/install-git-hooks.py`; verify

@@ -30,7 +30,11 @@ _ih_spec = importlib.util.spec_from_file_location(
 install_git_hooks = importlib.util.module_from_spec(_ih_spec)
 _ih_spec.loader.exec_module(install_git_hooks)
 
-SHIPPED_HOOK = ROOT / ".githooks" / "pre-push-data"
+# One string, for the reason written out in tests/test_install_git_hooks.py: the
+# two-part form spells nothing day mode's literal route can match, so the data
+# overlay's push gate had zero edges from this file and a change to it selected no
+# test at all.
+SHIPPED_HOOK = ROOT / ".githooks/pre-push-data"
 
 
 def _init_repo(tmp_path, name="data") -> Path:

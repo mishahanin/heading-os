@@ -10,11 +10,22 @@ _spec = importlib.util.spec_from_file_location("install_git_hooks", ROOT / "scri
 mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mod)
 
+# `ROOT / ".githooks/pre-push"`, ONE string, not `ROOT / ".githooks" / "pre-push"`.
+# This is not style. `scripts/utils/day_mode.py` finds the files a test drives as
+# a subprocess by reading the test's string constants, and neither fragment of the
+# two-part form is a constant it can recognise: `.githooks` is not an extension it
+# accepts and `pre-push` has no separator and no dot. MEASURED 2026-09-04: every
+# reference to either hook in this tree used the two-part form, so `.githooks/pre-push`
+# and `.githooks/pre-push-data` had ZERO importers and ZERO literal users, and a
+# change to the engine's own push gate selected no test for it. The blind-spot guard
+# could not report it either, because `blind_files()` walks `.py` files only and a
+# hook is shell. Joining the path in one literal is what makes the edge visible.
+
 
 def test_install_writes_pre_push(tmp_path):
     # a throwaway git repo
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    src = ROOT / ".githooks" / "pre-push"
+    src = ROOT / ".githooks/pre-push"
     mod.install_pre_push(tmp_path, src)
     hook = tmp_path / ".git" / "hooks" / "pre-push"
     assert hook.is_file()
@@ -25,7 +36,7 @@ def test_install_writes_pre_push(tmp_path):
 def test_check_detects_missing(tmp_path):
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     assert mod.check_pre_push(tmp_path) is False
-    mod.install_pre_push(tmp_path, ROOT / ".githooks" / "pre-push")
+    mod.install_pre_push(tmp_path, ROOT / ".githooks/pre-push")
     assert mod.check_pre_push(tmp_path) is True
 
 
@@ -39,7 +50,7 @@ def _hook_body_without_comments() -> str:
     """
     return "\n".join(
         line for line in
-        (ROOT / ".githooks" / "pre-push").read_text(encoding="utf-8").splitlines()
+        (ROOT / ".githooks/pre-push").read_text(encoding="utf-8").splitlines()
         if not line.lstrip().startswith("#")
     )
 
@@ -122,7 +133,7 @@ def _armed_repo(tmp_path: Path, suite_exit: int) -> tuple[Path, Path]:
     (repo / "scripts" / "run-tests.py").write_text("raise SystemExit(0)\n",
                                                    encoding="utf-8")
 
-    mod.install_pre_push(repo, ROOT / ".githooks" / "pre-push")
+    mod.install_pre_push(repo, ROOT / ".githooks/pre-push")
     return repo, record
 
 
@@ -168,11 +179,23 @@ def test_the_engine_hook_runs_the_repos_own_venv_interpreter(tmp_path):
     """Which interpreter ran the suite is the difference between the pinned
     toolchain and whatever `python3` resolves to. The stub sits at
     `<repo>/.venv/bin/python` and nowhere else, so its record existing is the
-    proof that branch was taken."""
+    proof that branch was taken.
+
+    The record holds one argv entry per line. It was asserted with `endswith` on
+    the whole blob until 2026-09-04, which read the LAST argument rather than the
+    script, so the gate gaining a flag failed a test about which interpreter ran.
+    The flag is now asserted on its own line, because the hook passing
+    `--pre-push` is the thing that makes a push run the tests it can reach
+    instead of all of them.
+    """
     repo, record = _armed_repo(tmp_path, suite_exit=0)
     _push(repo)
-    assert record.read_text(encoding="utf-8").strip().endswith(
-        "scripts/run-tests.py"), record.read_text(encoding="utf-8")
+    argv = record.read_text(encoding="utf-8").split()
+    assert argv, "the venv interpreter recorded no argv at all"
+    assert argv[0].endswith("scripts/run-tests.py"), argv
+    assert "--pre-push" in argv, (
+        f"the installed hook stopped asking for the narrowed mode, so every "
+        f"push runs the whole suite again: {argv}")
 
 
 def test_the_engine_hook_says_so_out_loud_when_there_is_no_venv(tmp_path):

@@ -12,8 +12,31 @@
 # and 2026-08-21 only because every one of the engine's nine LFS files was added
 # on the day the hook first replaced the stock one, so none needed uploading
 # afterwards. Absence of a symptom was not coverage.
+#
+# STDIN IS READ ONCE, HERE, AND REPLAYED TO BOTH CONSUMERS. Git writes one line
+# per ref, `<local ref> <local sha> <remote ref> <remote sha>`, and that is the
+# authoritative statement of what this push adds. Since 2026-09-04 the test gate
+# needs it too, to run the tests this push can reach instead of all 24805 of
+# them (MEASURED 2026-09-04, one clean full run over the merged tree at ca9457d:
+# 24805 passed, 2 skipped, 979 s).
+#
+# A pipe is consumed by whoever reads it first, so the note above (verified
+# 2026-08-21, that the ref lines survive the test run intact) stopped being true
+# the moment anything upstream of git-lfs read them. It held only because nothing
+# did, which is a property of what was absent rather than a guarantee. `$(cat)`
+# takes the lines once and `printf` feeds each consumer its own copy.
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
+
+# `$(cat)` strips every trailing newline; `printf '%s\n'` puts exactly one back,
+# which is the shape git wrote. Empty stays empty rather than becoming a blank
+# line, so neither consumer is handed a ref line that is not there.
+REFS="$(cat)"
+replay_refs() {
+    if [ -n "$REFS" ]; then
+        printf '%s\n' "$REFS"
+    fi
+}
 if [ -x "$ROOT/.venv/bin/python" ]; then
     PY="$ROOT/.venv/bin/python"
 else
@@ -29,14 +52,16 @@ else
          "$(command -v python3 || echo python3), which is NOT the pinned" \
          "toolchain. Re-arm with: uv sync --all-extras --group dev" >&2
 fi
-"$PY" "$ROOT/scripts/run-tests.py"
+replay_refs | "$PY" "$ROOT/scripts/run-tests.py" --pre-push
 
 # Hand off to git-lfs, which owned this hook slot before the gate did. Git calls a
 # pre-push hook with <remote> <url>; `git lfs pre-push` needs them, so a call with
-# no arguments is not a real push and there is nothing to hand over. Verified
-# 2026-08-21 that the ref lines git writes to stdin survive the test run intact,
-# so git-lfs still sees what it needs to decide which objects to upload.
+# no arguments is not a real push and there is nothing to hand over. git-lfs reads
+# the SAME ref lines the gate just read, from the replay above, and decides which
+# objects to upload from them. Drop the replay and a newly added .png, .pdf,
+# .pptx or .docx pushes as a POINTER with no object behind it.
 if [ "$#" -gt 0 ] && command -v git-lfs >/dev/null 2>&1; then
-    exec git lfs pre-push "$@"
+    replay_refs | git lfs pre-push "$@"
+    exit $?
 fi
 exit 0

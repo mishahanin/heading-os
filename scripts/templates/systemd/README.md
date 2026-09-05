@@ -84,11 +84,28 @@ The installer substitutes:
 - `{{WORKSPACE}}` — absolute path to the workspace root
 - `{{PYTHON}}` — absolute path to the Python interpreter (typically `/usr/bin/python3` or a venv)
 - `{{TZ}}` — the operator's timezone, for the `OnCalendar` suffix and for `Environment=TZ=`
+- `{{TOOLPATH}}` — the installing shell's own `PATH`, for `Environment=PATH=`.
+  Substituted by `install-nightly-refresh-timer.sh` only, and used by
+  `nightly-refresh.service` only.
 
-Those three are the complete set. There is deliberately no `{{OLLAMA_HOST}}`
+Those four are the complete set. There is deliberately no `{{OLLAMA_HOST}}`
 token: a host baked into a unit at install time becomes a second, staler source
 of truth than the machine pin, for the same reason as `HEADING_OS_TZ` below.
 `chronicle.service` carries that note where someone editing it will read it.
+
+A token is substituted by the installer that renders it and by no other, so a
+token added to a template also has to be added to that installer's `sed` block.
+Forgetting is caught rather than shipped: every `--check` greps the rendered
+units for a surviving `{{` and fails naming it.
+
+`{{TOOLPATH}}` is the one token whose value is not derived from the workspace,
+and it exists because a systemd user service inherits the MANAGER's `PATH`, which
+carries no per-user tool directory. MEASURED 2026-09-05: the nightly ran under
+that PATH, found none of `gh`, `git-lfs`, `node`, `npx`, `marp`, `uv`,
+`pre-commit`, `claude` or `herdr`, skipped 240 tests instead of 2, exited 0, and
+marked the tree green. Unlike `HEADING_OS_TZ`, this value has no `.env` key to go
+stale against; it can still go stale against the machine (an nvm version bump),
+and the ceiling in `config/nightly-skip-baseline.json` is what makes that loud.
 
 The timer installers resolve `{{TZ}}` through `python3 scripts/utils/paths.py tz`,
 which loads `.env` before reading `HEADING_OS_TZ`. Reading the environment alone

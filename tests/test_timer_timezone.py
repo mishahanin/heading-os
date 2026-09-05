@@ -480,7 +480,14 @@ def test_every_template_renders_to_a_unit_systemd_accepts(tmp_path):
                     # `install-chronicle-timer.sh` renders from
                     # config/memory-index.yaml. A token added to a template and not
                     # to this map fails the assertion below, which is the point.
-                    .replace("{{OLLAMA_HOST}}", "http://127.0.0.1:11434"))
+                    .replace("{{OLLAMA_HOST}}", "http://127.0.0.1:11434")
+                    # Added 2026-09-05 with nightly-refresh.service's PATH, which
+                    # `install-nightly-refresh-timer.sh` renders from the
+                    # installing shell's own PATH. A systemd user service
+                    # inherits the manager's PATH, which reaches none of the
+                    # tools the suite gates on; that is how a night skipped 240
+                    # tests and still marked the tree green.
+                    .replace("{{TOOLPATH}}", "/opt/tools/bin:/usr/bin:/bin"))
 
         assert "{{" not in rendered, (
             f"{template.name} still carries an unrendered token after substitution: "

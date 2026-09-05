@@ -43,6 +43,28 @@ TimeoutStartSec=5400
 # the unit would become a second, staler source of truth (this directory's
 # README carries the reasoning).
 Environment=TZ={{TZ}}
+# A systemd user service inherits the MANAGER's PATH, not the PATH of the shell
+# that installed it. MEASURED 2026-09-05 on this machine, the manager's is
+#
+#     /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+#
+# with no ~/.local/bin, no ~/bin and no nvm node bin, so gh, git-lfs, node, npx,
+# marp, uv, pre-commit, claude and herdr are all absent. Every test gated on one
+# of them SKIPS, and a skipped test exits 0. On the first fire of this timer the
+# night ran 24599 of 24839 collected checks, skipped 240, and marked the tree
+# green; the same tree in an ordinary shell had 2 skips and one FAILURE.
+#
+# {{TOOLPATH}} is the installing shell's own PATH, which is by construction the
+# one the suite is known to pass under. It is the only value on the machine that
+# knows where these tools live, and no .env key carries it.
+#
+# This line is the CONVENIENCE, not the control. It can go stale on its own (an
+# nvm version bump moves the node bin and nothing here says so), and what makes
+# that loud rather than silent is the skip ceiling in
+# config/nightly-skip-baseline.json, which scripts/nightly-refresh.py refuses to
+# mark green above. Re-run the installer after changing a toolchain; it merges
+# and keeps every other local value.
+Environment=PATH={{TOOLPATH}}
 Environment=PYTHONUNBUFFERED=1
 # The runner exits non-zero on a failing suite and on a post-run step that did
 # not complete, so a non-zero exit correctly surfaces as `failed`. No

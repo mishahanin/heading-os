@@ -64,6 +64,12 @@ Routes, in the order they are reported:
                     name. This is the route that covers files a test drives as
                     a SUBPROCESS, which is not an import and which no import
                     graph will ever model.
+    subtree         a test globs ONE DIRECTORY and the changed file is what that
+                    glob returns: `DOCS.glob("*.html")` reaches every page under
+                    `docs/`. A directory full of files nothing imports and no
+                    string names -- the docs pages, the systemd unit templates --
+                    has no other route, and a sweep of the whole tree is not this
+                    route but the core below.
     core            the derived mandatory core; always selected
 
 WHY NOT `codegraph affected`. The index is real: 1592 files, and 8296 edges from
@@ -181,6 +187,7 @@ leading space, and exited 5 (no tests collected) while looking like a fast run.
 from __future__ import annotations
 
 import ast
+import fnmatch
 import hashlib
 import json
 import re
@@ -197,6 +204,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
 
 CACHE_REL = Path(".cache/day-mode/facts.db")
+
+# Bump this whenever `Facts` gains, loses or changes the meaning of a field.
+# `_open_cache` explains why a rename rather than a migration.
+FACTS_TABLE = "facts_v2"
 
 # Calls that mean "read the repository tree". A test that does this has the whole
 # tree as its input, so ANY change alters what it sees and no import edge and no
@@ -226,7 +237,30 @@ _ROOTISH_NAMES = frozenset({"ROOT", "REPO", "REPO_ROOT", "WORKSPACE", "WORKSPACE
 
 # A trailing file extension: `.json`, `.yaml`, `.md`, `.py`, `.sh`. Anchored to
 # the end so a dotted module name still falls through to the identifier test.
-_EXTENSION = re.compile(r"\.[A-Za-z][A-Za-z0-9]{0,5}\Z")
+#
+# TWELVE, and it used to be five. MEASURED 2026-09-05 over the 2375 tracked files
+# of this repository: the longest extension on a non-dotfile basename is
+# `.destinations` (12 characters after the dot), and the one that mattered is
+# `.service` (7), which 21 files carry. At five, `bridge-daemon.service` was read
+# as prose and no test could be attributed to it, while `sentinel.service` was
+# accepted -- not by this pattern, but by the dotted-identifier test below, which
+# a hyphen defeats and a plain word does not. That asymmetry is what made the bug
+# look arbitrary from the outside: `.timer` passed and `.service` did not.
+#
+# A bound is still a bound. A thirteen-character extension landing in this tree
+# tomorrow is invisible again, which is why `tests/test_a_selector_that_read_a_
+# filename_as_prose.py` asserts the bound against the tree's own longest
+# extension rather than against the number 12.
+_EXTENSION = re.compile(r"\.[A-Za-z][A-Za-z0-9]{0,12}\Z")
+
+# A whole DOTFILE NAME, which is a different shape from an extension and is why
+# widening the bound alone would not have been enough. `.gitignore` has no
+# extension: the dot opens the name rather than separating a suffix, so the
+# question is not "how long may a suffix be" but "is this string a leading-dot
+# filename". `.python-version` and `.worktreeinclude` carry hyphens and lengths
+# that no extension rule should have to stretch to cover, and `.secrets.baseline`
+# is both shapes at once.
+_DOTFILE = re.compile(r"\A\.[A-Za-z][A-Za-z0-9._-]*\Z")
 
 
 class DayModeError(RuntimeError):
@@ -244,12 +278,15 @@ class Facts:
 
     `imports` are dotted module names as written. `literals` are string
     constants that could name a file or a module. `sweeps` is non-empty when the
-    file reads the repository tree.
+    file reads the repository tree. `scoped` holds the SUBTREE sweeps: each a
+    `(kind, directory, pattern)` triple naming a glob the file runs over one
+    directory rather than over the whole tree.
     """
 
     imports: frozenset[str] = frozenset()
     literals: frozenset[str] = frozenset()
     sweeps: frozenset[str] = frozenset()
+    scoped: frozenset[tuple[str, str, str]] = frozenset()
 
 
 def _is_rootish(node: ast.AST) -> bool:
@@ -277,11 +314,24 @@ def _looks_like_a_reference(text: str) -> bool:
     Without this the cache holds every docstring in the repository -- this suite
     writes long ones -- and the literal route compares changed paths against
     English sentences. The filter is on shape, not on meaning: a separator, a
-    `.py`, or a dotted identifier chain.
+    leading-dot filename, an extension, or a dotted identifier chain.
+
+    WHAT IS STILL DROPPED, and it is deliberate. A basename with neither a dot
+    nor a separator -- `LICENSE`, `NOTICE`, `pre-push` -- is indistinguishable
+    by shape from an ordinary word, and this repository tracks five such files.
+    MEASURED 2026-09-05: accepting every hyphenated or ALL-CAPS bare word grew
+    the literal set from 14453 to 21192, a 47% increase carried on every cached
+    payload, and moved two of thirty-six files off the full suite. That is the
+    wrong trade, and the two files still widen honestly rather than being routed
+    by a rule that would also accept `utf-8` and `pre-commit` as filenames.
     """
     if not text or len(text) > 200 or "\n" in text or " " in text:
         return False
     if "/" in text:
+        return True
+    # A leading-dot filename, before the extension test, because the two ask
+    # different questions and only this one accepts `.gitignore`.
+    if _DOTFILE.match(text):
         return True
     # Any file extension, not just `.py`, and not just names that are legal
     # Python identifiers. MEASURED 2026-09-04: this used to accept `.py` or a
@@ -296,6 +346,110 @@ def _looks_like_a_reference(text: str) -> bool:
     # bare version string does not qualify.
     parts = text.split(".")
     return len(parts) >= 2 and all(p.isidentifier() for p in parts)
+
+
+def _root_relative_dir(node: ast.AST, binds: dict[str, str]) -> str | None:
+    """The repository-relative directory an expression names, or None.
+
+    `""` is the repository root itself and is a DIFFERENT answer from None: the
+    caller refuses it, because a sweep of the whole tree is the mandatory core's
+    business and a route that claimed every file would leave nothing for the
+    push gate to widen on.
+
+    `binds` is what makes this worth writing. `_is_rootish` reads one expression
+    and cannot follow a name to its assignment, so `DOCS = ROOT / "docs"` at
+    module level followed by `DOCS.glob("*.html")` is invisible to it: the
+    receiver is a bare `Name`, and `DOCS` neither is nor contains `ROOT`. That is
+    the whole of cause B. MEASURED 2026-09-05: three of the four tests that read
+    `docs/*.html` reach it exactly that way.
+    """
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        base = _root_relative_dir(node.left, binds)
+        if base is None:
+            return None
+        right = node.right
+        if not (isinstance(right, ast.Constant) and isinstance(right.value, str)):
+            return None
+        piece = right.value.strip("/")
+        if not piece:
+            return base
+        return f"{base}/{piece}" if base else piece
+    if isinstance(node, ast.Name):
+        if node.id in binds:
+            return binds[node.id]
+        return "" if _is_rootish(node) else None
+    return "" if _is_rootish(node) else None
+
+
+def _module_level_dirs(tree: ast.Module) -> dict[str, str]:
+    """Module-level names bound to a repository-relative directory.
+
+    Module level only, and single-target assignments only. A name rebound inside
+    a function is not followed, because following it would mean a scope analysis
+    for a gain this tree does not show: every scoped sweep measured on
+    2026-09-05 reads a module-level constant.
+    """
+    binds: dict[str, str] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        resolved = _root_relative_dir(node.value, binds)
+        if resolved is not None:
+            binds[target.id] = resolved
+    return binds
+
+
+def _scoped_sweep(node: ast.Call, binds: dict[str, str]) -> tuple[str, str, str] | None:
+    """One `(kind, directory, pattern)` triple for a subtree glob, or None."""
+    func = node.func
+    if not isinstance(func, ast.Attribute) or func.attr not in {"glob", "rglob", "iterdir"}:
+        return None
+    directory = _root_relative_dir(func.value, binds)
+    if not directory:
+        # None (unresolvable) and "" (the whole tree) are both refused here.
+        return None
+    if func.attr == "iterdir":
+        return ("glob", directory, "*")
+    if not node.args:
+        return None
+    first = node.args[0]
+    if not (isinstance(first, ast.Constant) and isinstance(first.value, str)):
+        return None
+    return (func.attr, directory, first.value)
+
+
+def swept_by(rel: str, kind: str, directory: str, pattern: str) -> bool:
+    """Would that sweep have returned this repository-relative path?
+
+    Segment counting, not `fnmatch` over the whole string, because `glob` and
+    `rglob` differ exactly there: `docs/*.html` returns nothing from
+    `docs/assets/`, while `rglob("*.html")` returns it from any depth. Matching
+    the string alone would collapse the two and hand a non-recursive glob files
+    it never saw.
+    """
+    prefix = directory + "/"
+    if not rel.startswith(prefix):
+        return False
+    parts = rel[len(prefix):].split("/")
+    wanted = pattern.strip("/").split("/")
+    if kind == "glob":
+        if len(parts) != len(wanted):
+            return False
+        tail = parts
+    else:
+        if len(parts) < len(wanted):
+            return False
+        tail = parts[len(parts) - len(wanted):]
+    # `strict=True` cannot raise here: both branches above returned already
+    # unless the lengths agree, and `tail` is sliced to `len(wanted)`. It is
+    # written anyway so that a future edit to either branch fails loudly rather
+    # than silently truncating the comparison to the shorter side.
+    return all(
+        fnmatch.fnmatchcase(part, want) for part, want in zip(tail, wanted, strict=True)
+    )
 
 
 def _resolve_relative(module: str, level: int, path: str) -> str:
@@ -328,6 +482,8 @@ def extract(path: str, source: str) -> Facts:
     imports: set[str] = set()
     literals: set[str] = set()
     sweeps: set[str] = set()
+    scoped: set[tuple[str, str, str]] = set()
+    binds = _module_level_dirs(tree)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -358,12 +514,17 @@ def extract(path: str, source: str) -> Facts:
                     sweeps.add(func.attr)
             elif isinstance(func, ast.Name) and func.id in REPO_HELPERS:
                 sweeps.add(func.id)
+            found_scope = _scoped_sweep(node, binds)
+            if found_scope is not None:
+                scoped.add(found_scope)
 
     for name in imports:
         if "repo_files" in name:
             sweeps.add("repo_files")
 
-    return Facts(frozenset(imports), frozenset(literals), frozenset(sweeps))
+    return Facts(
+        frozenset(imports), frozenset(literals), frozenset(sweeps), frozenset(scoped)
+    )
 
 
 # --------------------------------------------------------------------------
@@ -405,11 +566,25 @@ def _git_z(root: Path, *args: str) -> list[str]:
 
 
 def _open_cache(root: Path) -> sqlite3.Connection:
+    """The fact cache, at the schema this module reads.
+
+    THE TABLE NAME CARRIES THE SCHEMA VERSION, and that is the whole migration.
+    A payload is keyed on the file's content hash, so a row written by an older
+    version of `extract` matches for as long as the file is untouched: the day
+    `scoped` was added, every file in the tree would have kept answering "no
+    subtree sweeps" from a cache that was written before the question existed,
+    and only an edit to a file would have fixed it. `.claude/rules` names that
+    shape -- a cache keyed on unchanged input makes a stale answer permanent --
+    and a rename is the cheapest thing that cannot get it wrong. The old table
+    is dropped rather than left behind, because a cache nothing reads is a
+    megabyte of confusion for whoever opens this database next.
+    """
     cache = root / CACHE_REL
     cache.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(cache)
+    conn.execute("DROP TABLE IF EXISTS facts")
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS facts ("
+        f"CREATE TABLE IF NOT EXISTS {FACTS_TABLE} ("  # noqa: S608  # nosec B608 - FACTS_TABLE is a module constant, never input
         " path TEXT PRIMARY KEY, hash TEXT NOT NULL, payload TEXT NOT NULL)"
     )
     return conn
@@ -437,7 +612,7 @@ def load_facts(
     conn = _open_cache(root) if use_cache else None
     if conn is not None:
         for rel, cached_hash, payload in conn.execute(
-            "SELECT path, hash, payload FROM facts"
+            f"SELECT path, hash, payload FROM {FACTS_TABLE}"  # noqa: S608  # nosec B608 - module constant
         ):
             if digests.get(rel) == cached_hash:
                 blob = json.loads(payload)
@@ -445,6 +620,7 @@ def load_facts(
                     frozenset(blob["imports"]),
                     frozenset(blob["literals"]),
                     frozenset(blob["sweeps"]),
+                    frozenset(tuple(triple) for triple in blob["scoped"]),
                 )
 
     parsed = 0
@@ -464,6 +640,7 @@ def load_facts(
                         "imports": sorted(found.imports),
                         "literals": sorted(found.literals),
                         "sweeps": sorted(found.sweeps),
+                        "scoped": sorted(found.scoped),
                     }
                 ),
             )
@@ -472,7 +649,7 @@ def load_facts(
     if conn is not None:
         with conn:
             conn.executemany(
-                "INSERT INTO facts(path, hash, payload) VALUES (?, ?, ?)"
+                f"INSERT INTO {FACTS_TABLE}(path, hash, payload) VALUES (?, ?, ?)"  # noqa: S608  # nosec B608 - module constant
                 " ON CONFLICT(path) DO UPDATE SET hash=excluded.hash,"
                 " payload=excluded.payload",
                 fresh,
@@ -481,9 +658,9 @@ def load_facts(
             # `NOT IN (?, ?, ...)` over every tracked file builds the SQL by
             # f-string and binds 1547 parameters, which is both a dynamic-SQL
             # finding and a run at SQLITE_MAX_VARIABLE_NUMBER.
-            cached = {row[0] for row in conn.execute("SELECT path FROM facts")}
+            cached = {row[0] for row in conn.execute(f"SELECT path FROM {FACTS_TABLE}")}  # noqa: S608  # nosec B608
             stale = [(path,) for path in cached - set(sources)]
-            conn.executemany("DELETE FROM facts WHERE path = ?", stale)
+            conn.executemany(f"DELETE FROM {FACTS_TABLE} WHERE path = ?", stale)  # noqa: S608  # nosec B608
         conn.close()
 
     return facts, parsed
@@ -526,6 +703,7 @@ class Index:
     core: dict[str, list[str]] = field(default_factory=dict)
     ambiguous_basenames: set[str] = field(default_factory=set)
     conftests: set[str] = field(default_factory=set)
+    subtree_sweeps: dict[str, list[tuple[str, str, str]]] = field(default_factory=dict)
 
     @property
     def test_files(self) -> list[str]:
@@ -576,6 +754,13 @@ def build_index(root: Path | None = None, *, use_cache: bool = True) -> Index:
             index.core[rel] = sorted(sweeps)
 
     index.conftests = {rel for rel in tracked if Path(rel).name == "conftest.py"}
+
+    # TEST FILES ONLY. A scoped sweep in a script is a fact about that script,
+    # and a route has to end at something pytest can run.
+    for rel in index.test_files:
+        found_scoped = facts.get(rel, Facts()).scoped
+        if found_scoped:
+            index.subtree_sweeps[rel] = sorted(found_scoped)
 
     return index
 
@@ -681,6 +866,26 @@ def select(index: Index, changed: list[str]) -> Selection:
         for test in sorted(t for t in index.literal_users.get(rel, ()) if is_test_file(t)):
             routes[test].append(f"literal:{rel}")
             reached.add(test)
+
+        # A SUBTREE SWEEP READS THE FILE. A test that globs `docs/*.html` opens
+        # every one of them, so a changed page is genuinely covered by it, and
+        # before this route existed no other route could say so: the pages are
+        # not imported, and a test that enumerates a directory never spells any
+        # single name in a string. MEASURED 2026-09-05: `docs/RULES-REFERENCE.html`
+        # and 12 of the 16 hyphenated `*.service` unit templates reached no test
+        # at all, so every push carrying one ran the whole 24,965-test suite.
+        #
+        # WHY THIS CANNOT SWALLOW THE WIDENING. `_scoped_sweep` refuses a sweep
+        # whose directory resolves to the repository root, so the broadest edge
+        # this route can build is one subdirectory wide. A file no test's glob
+        # covers is still undecided and the gate still widens on it, which is
+        # what `.secrets.baseline`, `LICENSE` and `docs/.nojekyll` do today.
+        for test, sweeps in index.subtree_sweeps.items():
+            if test == rel:
+                continue
+            if any(swept_by(rel, *sweep) for sweep in sweeps):
+                routes[test].append(f"subtree:{rel}")
+                reached.add(test)
 
         # A conftest is a PROXY FOR ITS SUBTREE. Pytest loads it for every test
         # underneath it and never through an import statement, so no edge runs

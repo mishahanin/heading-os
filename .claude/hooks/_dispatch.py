@@ -135,7 +135,13 @@ SECRET_PATTERNS = [
     (re.compile(r'cpx-[a-zA-Z0-9]{16,}'), "CLIProxyAPI local proxy key"),
     (re.compile(r'ghp_[a-zA-Z0-9]{16,}'), "GitHub personal access token"),
     (re.compile(r'gho_[a-zA-Z0-9]{16,}'), "GitHub OAuth token"),
-    (re.compile(r'AKIA[0-9A-Z]{16}'), "AWS access key"),
+    # Boundary-anchored so an embedded base64 image cannot spell a key. The
+    # reasoning, the measurement, and why the padding character is NOT in the
+    # lookahead live in `scripts/utils/secret_patterns.py`; this copy exists
+    # because that import cannot be made here (see the module docstring there),
+    # and `tests/security/test_SEC_004_credential_patterns.py` holds the two
+    # byte-identical.
+    (re.compile(r'(?<![A-Za-z0-9+/])AKIA[0-9A-Z]{16}(?![A-Za-z0-9+/])'), "AWS access key"),
     (re.compile(r'xoxb-[0-9]+-[a-zA-Z0-9]+'), "Slack bot token"),
     (re.compile(r'xoxp-[0-9]+-[a-zA-Z0-9]+'), "Slack user token"),
     (re.compile(r'ya29\.[A-Za-z0-9._-]{50,}'), "Google OAuth token"),

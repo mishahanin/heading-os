@@ -45,11 +45,29 @@ and the walk-is-the-cost half is the intuitive and wrong one.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def content_digest(blob: bytes) -> str:
+    """The digest a cache key is allowed to be built from: CONTENT, nothing else.
+
+    One line, and it lives here rather than in each cache because the rule it
+    spells is the load-bearing one. An mtime moves when a file is touched and
+    not edited, and stands still when a file is restored from a backup with an
+    old timestamp; a size collides on any edit that preserves length. Both are
+    the cheap key, and both answer "unchanged" over changed bytes, which for a
+    security verdict is a false green.
+
+    Two callers: `test_cache.corpus_key` folds one of these per file into a
+    whole-tree key, and `content_scan_cache` uses one per file so that the
+    verdict for an untouched file survives an edit to a different file.
+    """
+    return hashlib.sha256(blob).hexdigest()
 
 
 def ignored_paths_or_none(paths, root: Path | None = None) -> set[str] | None:

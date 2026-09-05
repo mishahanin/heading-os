@@ -69,7 +69,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from scripts.utils.repo_files import IndexUnreadable, working_tree_paths  # noqa: E402
+from scripts.utils.repo_files import (  # noqa: E402
+    IndexUnreadable, content_digest, working_tree_paths,
+)
+from scripts.utils.verdict_store import SqliteVerdictStore  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 STORE_PATH = ROOT / ".cache" / "test-verdicts.db"
@@ -727,7 +730,7 @@ def corpus_key(root: Path | None = None) -> str:
             raise KeyUnavailable(f"cannot hash {name}: {exc}") from exc
         digest.update(name.encode("utf-8", "surrogateescape"))
         digest.update(b"\0")
-        digest.update(hashlib.sha256(blob).digest())
+        digest.update(content_digest(blob).encode("ascii"))
     return digest.hexdigest()
 
 
@@ -743,51 +746,28 @@ CREATE TABLE IF NOT EXISTS verdicts (
     recorded_at TEXT NOT NULL,
     PRIMARY KEY (base, corpus_key, test_file)
 );
-CREATE TABLE IF NOT EXISTS meta (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
 """
 
 
-class VerdictStore:
+class VerdictStore(SqliteVerdictStore):
     """Which test files passed, against which base and which corpus key.
 
     A row exists only for a file that PASSED. There is no failure row and no
     "unknown" row, because the only question asked of this store is "may this be
     skipped", and every answer other than a present row is no.
+
+    The connect-and-fail-closed half moved to `scripts/utils/verdict_store.py`
+    on 2026-09-05, when the content-leak gate's own verdict cache needed the
+    same twelve lines with a different table.
     """
 
-    def __init__(self, path: Path | None = None) -> None:
-        self.path = STORE_PATH if path is None else Path(path)
-        self.corrupt_reason: str | None = None
+    SCHEMA = _SCHEMA
+    # The module constant, which `corpus_key` also stamps into the key, so the
+    # two cannot name different generations of the same store.
+    SCHEMA_VERSION = globals()["SCHEMA_VERSION"]
 
-    def _connect(self) -> sqlite3.Connection | None:
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(self.path)
-            conn.executescript(_SCHEMA)
-            stored = conn.execute(
-                "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
-            if stored is None:
-                conn.execute(
-                    "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
-                    (SCHEMA_VERSION,))
-                conn.commit()
-            elif stored[0] != SCHEMA_VERSION:
-                conn.close()
-                self.corrupt_reason = (
-                    f"store schema is {stored[0]}, this build writes "
-                    f"{SCHEMA_VERSION}")
-                return None
-            return conn
-        except (sqlite3.DatabaseError, OSError) as exc:
-            # Corrupt, truncated, a directory where the file should be, or a
-            # file this user cannot open. Every one of them means no verdict can
-            # be read, which means everything runs. Recorded rather than
-            # swallowed so the caller can print the loud line.
-            self.corrupt_reason = str(exc)
-            return None
+    def __init__(self, path: Path | None = None) -> None:
+        super().__init__(STORE_PATH if path is None else Path(path))
 
     def passed_files(self, base: str, key: str) -> set[str] | None:
         """The files recorded green for this base and key, or None if unreadable.

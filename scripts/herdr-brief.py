@@ -59,20 +59,46 @@ types it.
 
 HELM ONLY. Delivering a prompt changes the behaviour of a running process, which
 `CLAUDE.md` puts outside a YARD categorically. `require_main_clone` refuses.
+
+DELIVERY IS VERIFIED, NEVER TRUSTED
+-----------------------------------
+`herdr agent prompt` answers with the pane it was GIVEN, not the pane that
+received the text. MEASURED 2026-09-06: a brief addressed to `w59:p1` was
+answered `"pane_id":"w59:p1","agent_status":"working"` and landed in a
+DIFFERENT yard, `presentation-book-4-uz`, where the operator had live work. It
+arrived there as a `queue-operation` and then as a `promptSource: "queued"`
+user record; the addressed workspace had no transcript at all. The same shape
+was recorded on 2026-09-05 (register item 19) when a brief for `w56:p1`
+executed in `w55`, and in both cases the addressed pane had NO AGENT RUNNING.
+
+So this script asks two questions herdr's reply cannot answer:
+
+* BEFORE sending, does the target pane's checkout hold a session at all? A
+  workspace whose Claude project directory has no transcript has never run an
+  agent, and sending to it is what misdelivers. Refuse.
+* AFTER sending, did the text actually arrive THERE? Every brief carries a
+  unique id line; this polls the target's own transcript for it and, when it
+  does not appear, searches every other project directory and NAMES where it
+  went. Exit non-zero either way.
+
+Neither check trusts herdr. Both read the transcripts the harness writes.
 """
 from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import shutil
 import subprocess
 import sys
+import time
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.clone_guard import require_main_clone  # noqa: E402
-from scripts.utils.colors import CYAN, GRAY, GREEN, RED, RESET  # noqa: E402
+from scripts.utils.colors import CYAN, GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
 
 HERDR_BIN = "herdr"
 
@@ -80,8 +106,19 @@ HERDR_BIN = "herdr"
 # `scripts/utils/herdr_agent.py` measured for the same subcommand.
 PROMPT_TIMEOUT = 10
 
+# How long the delivered text may take to reach the receiving session's
+# transcript. MEASURED 2026-09-06 on the misdelivered brief: enqueue at
+# 21:30:09, the user record at 21:30:15, so six seconds from send to a record on
+# disk. Twenty-five gives that four times over; a brief that has not landed by
+# then has not landed.
+DELIVERY_TIMEOUT = 25
+DELIVERY_POLL = 1.0
+
 ROOT = Path(__file__).resolve().parent.parent
 GATE = ROOT / ".claude" / "hooks" / "_dispatch.py"
+PROJECTS_ROOT = Path.home() / ".claude" / "projects"
+
+BRIEF_ID_PREFIX = "X-HEADING-BRIEF-ID: "
 
 
 def brief_marker() -> str:
@@ -105,6 +142,138 @@ def brief_marker() -> str:
 def compose(marker: str, text: str) -> str:
     """The marker on its own first line, then the brief verbatim."""
     return f"{marker}\n\n{text}"
+
+
+def project_slug(checkout: Path) -> str:
+    """The directory Claude Code writes a checkout's transcripts under.
+
+    Every `/` and every `.` in the absolute path becomes `-`. Verified against
+    the two live mappings on this machine 2026-09-06:
+
+        /home/administrator/ai/claude-workspaces/.heading-os
+          -> -home-administrator-ai-claude-workspaces--heading-os
+        /home/administrator/ai/claude-workspaces/.yard/.heading-os/yard-x
+          -> -home-administrator-ai-claude-workspaces--yard--heading-os-yard-x
+
+    A leading `/` produces the leading `-`, and a dot-directory produces the
+    doubled one, which is why the rule is not "replace the separators".
+    """
+    return str(checkout).replace("/", "-").replace(".", "-")
+
+
+def checkout_for_pane(pane: str, workspaces: list) -> Path | None:
+    """The checkout path of the workspace owning `pane`, from herdr's own list.
+
+    Reading the list is not the same as trusting the SEND. The list is the only
+    place the pane-to-checkout mapping exists; what it cannot tell us, and what
+    this script therefore reads from the transcripts instead, is where a prompt
+    actually went.
+    """
+    workspace_id = pane.split(":", 1)[0]
+    for entry in workspaces:
+        if entry.get("workspace_id") != workspace_id:
+            continue
+        worktree = entry.get("worktree") or {}
+        path = worktree.get("checkout_path")
+        return Path(path) if path else None
+    return None
+
+
+def herdr_workspaces() -> list:
+    """`herdr workspace list`, parsed. Empty list on any failure."""
+    try:
+        result = subprocess.run([HERDR_BIN, "workspace", "list"],
+                                capture_output=True, text=True,
+                                timeout=PROMPT_TIMEOUT, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode != 0:
+        return []
+    try:
+        return (json.loads(result.stdout).get("result") or {}).get(
+            "workspaces") or []
+    except (ValueError, AttributeError):
+        return []
+
+
+def transcripts(project_dir: Path) -> list[Path]:
+    """The session transcripts under a project directory, newest last."""
+    try:
+        return sorted(project_dir.glob("*.jsonl"))
+    except OSError:
+        return []
+
+
+def carries(paths: list[Path], token: str) -> bool:
+    """Whether any of those transcripts contains `token`."""
+    needle = token.encode("utf-8")
+    for path in paths:
+        try:
+            with path.open("rb") as handle:
+                while chunk := handle.read(1 << 20):
+                    if needle in chunk:
+                        return True
+        except OSError:
+            continue
+    return False
+
+
+def landed_elsewhere(projects_root: Path, token: str,
+                     target: Path) -> list[str]:
+    """Every project directory OTHER than the target whose transcript has it.
+
+    This is the half that turned a silent misdelivery into a named one: on
+    2026-09-06 the brief was found in `presentation-book-4-uz`, a yard with the
+    operator's live work in it, while herdr had reported success for another.
+    """
+    found = []
+    try:
+        candidates = sorted(p for p in projects_root.iterdir() if p.is_dir())
+    except OSError:
+        return found
+    for directory in candidates:
+        if directory == target:
+            continue
+        if carries(transcripts(directory), token):
+            found.append(directory.name)
+    return found
+
+
+def verify_delivery(target: Path, token: str, projects_root: Path,
+                    timeout: float = DELIVERY_TIMEOUT) -> int:
+    """Poll the ADDRESSED session's own transcript for the brief's id.
+
+    Returns 0 when the text arrived there. Non-zero otherwise, having said where
+    it went if it can find out.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        if carries(transcripts(target), token):
+            print(f"{GREEN}Delivery verified in {target.name}.{RESET}")
+            return 0
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(DELIVERY_POLL)
+
+    strays = landed_elsewhere(projects_root, token, target)
+    print(f"{RED}herdr-brief: DELIVERY NOT VERIFIED after {timeout:.0f}s.{RESET}",
+          file=sys.stderr)
+    print(f"  The brief does not appear in the transcript of the workspace it "
+          f"was addressed to ({target.name}).", file=sys.stderr)
+    if strays:
+        print(f"{RED}  IT LANDED IN: {', '.join(strays)}{RESET}",
+              file=sys.stderr)
+        print("  That session is now holding a brief written for another tree. "
+              "Say so to whoever owns it; do not send again until you know why.",
+              file=sys.stderr)
+    else:
+        print("  It was not found in any other project directory either, so it "
+              "may still be in flight, or it may never have been delivered.",
+              file=sys.stderr)
+    print("  herdr's own reply names the pane it was GIVEN, not the pane that "
+          "received the text, so a success line above establishes nothing.",
+          file=sys.stderr)
+    return 4
 
 
 def send(pane: str, payload: str) -> int:
@@ -145,6 +314,11 @@ def main() -> int:
     )
     parser.add_argument("pane", help="HERDR pane id, e.g. w37:p1")
     parser.add_argument("text", help="the brief, verbatim")
+    parser.add_argument(
+        "--projects-root", default=None,
+        help=("where Claude Code writes session transcripts (default "
+              "~/.claude/projects). Present so the delivery checks can be "
+              "driven over a fixture tree; there is no flag to SKIP them."))
     args = parser.parse_args()
 
     # After `parse_args`, so `--help` answers from anywhere. A help text is a
@@ -168,12 +342,46 @@ def main() -> int:
             file=sys.stderr)
         return 2
 
-    payload = compose(marker, args.text)
-    print(f"{CYAN}About to send to {args.pane}:{RESET}")
+    projects_root = Path(args.projects_root) if args.projects_root \
+        else PROJECTS_ROOT
+
+    checkout = checkout_for_pane(args.pane, herdr_workspaces())
+    if checkout is None:
+        print(f"{RED}herdr-brief: REFUSED. herdr does not report a workspace "
+              f"owning {args.pane}, so there is no checkout to verify delivery "
+              f"against.{RESET}", file=sys.stderr)
+        return 5
+    target = projects_root / project_slug(checkout)
+
+    # The pre-flight. MEASURED twice, 2026-09-05 and 2026-09-06: both
+    # misdeliveries were to a pane whose session had never started, and both
+    # times herdr answered with the pane it was given.
+    if not transcripts(target):
+        print(
+            f"{RED}herdr-brief: REFUSED. No agent has ever run in "
+            f"{checkout}.{RESET}\n"
+            f"  Its Claude project directory ({target}) holds no transcript, so "
+            f"the pane has no session to receive this. Sending anyway is what "
+            f"misdelivers: MEASURED 2026-09-06, a brief addressed to a pane in "
+            f"exactly this state was answered with a success line naming that "
+            f"pane and arrived in a DIFFERENT yard that had live work in it.\n"
+            f"  Start an agent in that pane first, then send.",
+            file=sys.stderr)
+        return 5
+
+    brief_id = f"{BRIEF_ID_PREFIX}{uuid.uuid4()}"
+    payload = f"{compose(marker, args.text)}\n\n{brief_id}\n"
+    print(f"{CYAN}About to send to {args.pane} ({checkout.name}):{RESET}")
     print(f"{GRAY}{'-' * 72}{RESET}")
     print(payload)
     print(f"{GRAY}{'-' * 72}{RESET}")
-    return send(args.pane, payload)
+
+    status = send(args.pane, payload)
+    if status != 0:
+        return status
+
+    print(f"{YELLOW}Verifying delivery in {target.name} ...{RESET}")
+    return verify_delivery(target, brief_id, projects_root)
 
 
 if __name__ == "__main__":

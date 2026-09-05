@@ -133,6 +133,18 @@ outputs/browser/firecrawl-cache/
 .cache/test-verdicts.db-wal
 .cache/test-verdicts.db-shm
 
+# Content-leak gate verdict cache (scripts/utils/content_scan_cache.py). Which
+# engine files scanned CLEAN, against which content digest and which scanner
+# key. Machine-local and rebuildable. It must stay untracked for two further
+# reasons: a tracked store would sit inside the very corpus the gate scans, and
+# while it holds no denylist token, its key carries a digest of a token set
+# harvested from the private overlay and nothing derived from that belongs in a
+# public repository.
+.cache/content-verdicts.db
+.cache/content-verdicts.db-journal
+.cache/content-verdicts.db-wal
+.cache/content-verdicts.db-shm
+
 # Auto-generated sync state (calendar, email, linkedin) - moved out of datastore in restructure
 outputs/_sync/
 

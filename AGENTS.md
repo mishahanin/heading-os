@@ -139,7 +139,9 @@ PreToolUse hooks under `.claude/hooks/`; the shared credential vocabulary
 `scripts/secret-scanner.py`; the push wall `scripts/push-all.py` and its
 detectors `scripts/utils/engine_guard.py` and
 `scripts/utils/content_denylist.py`; the commit-time guards
-`scripts/leak-guard.py` and `scripts/content-guard.py`; the send gate
+`scripts/leak-guard.py` and `scripts/content-guard.py` together with
+`scripts/utils/content_scan_cache.py`, which decides when the second of those
+may reuse a verdict instead of re-reading a file; the send gate
 `scripts/utils/tool_risk.py` with its ledger `config/tool-risk.json`; the two
 egress controls, `scripts/utils/sensitive.py` (the fail-closed flag deciding
 whether anything leaves for a third party) and `scripts/utils/egress_proof.py`

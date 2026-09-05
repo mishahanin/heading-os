@@ -16,6 +16,23 @@ Usage:
   python scripts/content-guard.py --all                 # scan whole engine surface
   python scripts/content-guard.py --files a.py b.md      # scan specific files
   python scripts/content-guard.py --stdin               # newline-delimited paths on stdin
+  python scripts/content-guard.py --all --no-cache      # re-prove every file from scratch
+
+A file whose exact bytes this exact scanner already proved clean is not scanned
+again (`scripts/utils/content_scan_cache.py`). The verdict is keyed on the file's
+CONTENT digest AND on `scanner_key()`, a digest of the scanning code plus the
+resolved denylist, so an edit to either re-scans everything. Every doubt scans:
+no row, an unreadable or foreign-schema store, or a scanner key that could not be
+computed all mean SCAN, and the disabling reason is printed on stderr rather than
+being merely slower in silence. The file is still READ on every run, because the
+digest is taken over its bytes; what the cache saves is `Denylist.scan_text`,
+which is where the wall clock goes (MEASURED 2026-09-05 and recorded at the top
+of `content_scan_cache.py`: 98 s of scanning against 0.2 s of reading over 2330
+files, so the read was never the thing worth saving).
+
+`--no-cache` disables reuse for one run. It is the escape hatch for anyone who
+suspects the store rather than the tree, and it is what proves, by producing the
+cold number again, that a fast run was fast because of the cache.
 
 Exit: 0 clean, 1 leak(s) found OR a file that could not be scanned, 2 internal error.
 An EMPTY denylist also exits 0, printing "denylist unavailable; skipped." That is
@@ -46,8 +63,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.content_denylist import build_denylist
+from scripts.utils.content_scan_cache import ScanCache
 from scripts.utils.denial_log import log_denial
 from scripts.utils.engine_guard import engine_text_files, repo_carried_paths
+from scripts.utils.repo_files import content_digest
 from scripts.utils.workspace import get_data_root, get_workspace_root
 
 
@@ -91,6 +110,8 @@ def main() -> int:
     ap.add_argument("--strict", action="store_true",
                     help="also flag bare name-words split from person slugs (noisy; deep-audit only)")
     ap.add_argument("--quiet", action="store_true", help="print nothing on a clean result")
+    ap.add_argument("--no-cache", action="store_true",
+                    help="re-scan every file, ignoring the clean-verdict store")
     args = ap.parse_args()
 
     root = get_workspace_root()
@@ -150,20 +171,61 @@ def main() -> int:
 
     files = engine_text_files(root, candidates)
 
+    # Armed AFTER the denylist is built and BEFORE anything is scanned, which is
+    # the window `scanner_key` requires: building the denylist is what triggers
+    # the gate's lazy imports, so the module closure is complete here, and
+    # `scan_text` imports nothing, so it cannot grow the closure behind the key.
+    # The store follows the WORKSPACE root (a sandboxed run keeps its rows in the
+    # sandbox); the code half of the key deliberately does not, per `scanner_key`.
+    cache = ScanCache.disabled() if args.no_cache else ScanCache.open(
+        dl, store_root=root)
+    for warning in cache.drain_warnings():
+        print(f"{YELLOW}content-guard: {warning}{RESET}", file=sys.stderr)
+
     findings: list[tuple[str, int, str, str]] = []
     unscanned: list[str] = []
     for rel in files:
         try:
-            text = (root / rel).read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
+            blob = (root / rel).read_bytes()
+        except OSError as exc:
             # Never silent. This gate exists so nothing unscanned ships, and a
             # bare `continue` meant an engine-routed file with invalid UTF-8, or
             # one hitting a transient read error, passed with no record at all —
             # a clean verdict over a file nobody looked at.
             unscanned.append(f"{rel}: {exc}")
             continue
-        for lineno, matched, category in dl.scan_text(text):
-            findings.append((rel, lineno, matched, category))
+        # Read as BYTES and digested before anything else, because the digest is
+        # the cache key and it is a digest of content. The read is therefore not
+        # what the cache saves; `scan_text` below is.
+        digest = content_digest(blob)
+        if cache.is_clean(rel, digest):
+            # These exact bytes, under this exact scanner, already produced zero
+            # findings. Nothing about that verdict can have changed without
+            # changing the digest or the key, and either moves the row out of
+            # reach.
+            continue
+        try:
+            text = blob.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            unscanned.append(f"{rel}: {exc}")
+            continue
+        hits = dl.scan_text(text)
+        if hits:
+            for lineno, matched, category in hits:
+                findings.append((rel, lineno, matched, category))
+        else:
+            # Only a CLEAN verdict is recorded. A findings row would carry the
+            # matched token — the real-entity value itself — into a file inside
+            # the engine checkout, so a leaking file simply gets no row and is
+            # re-scanned, and re-blocked, on every run.
+            cache.note_clean(rel, digest)
+
+    # Flushed before any return below, including the blocked one: a clean file
+    # scanned during a run that also found a leak elsewhere is still clean, and
+    # its verdict is worth keeping.
+    cache.flush()
+    for warning in cache.drain_warnings():
+        print(f"{YELLOW}content-guard: {warning}{RESET}", file=sys.stderr)
 
     if unscanned:
         print(f"{YELLOW}content-guard: {len(unscanned)} file(s) could not be read "
@@ -230,8 +292,18 @@ def main() -> int:
         narrowed = (f"; {len(dl.withheld)} bare ordinary-English word(s) "
                     f"withheld, their multi-word form still guarding"
                     if dl.withheld else "")
+        # How much of this verdict was PROVED here and how much was REUSED. A
+        # clean line is a claim about what was compared (`.claude/rules/
+        # scope-claims.md`), and "clean" over a run that scanned four of 2330
+        # files is a different sentence from "clean" over a run that scanned all
+        # of them. Both numbers are printed so a reader can tell which they got,
+        # and so a cache that silently stopped hitting is visible as a number
+        # rather than only as a slower push.
+        reuse = (f"; {cache.reused} of {len(files)} unchanged since a clean "
+                 f"scan, {len(files) - cache.reused} re-read"
+                 if cache.reused else "")
         print(f"{GREEN}content-guard: clean{RESET} {GRAY}({scope}; "
-              f"{len(dl.tokens)} denylist tokens{narrowed}){RESET}")
+              f"{len(dl.tokens)} denylist tokens{narrowed}{reuse}){RESET}")
     return 0
 
 

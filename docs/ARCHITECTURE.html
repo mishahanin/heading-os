@@ -372,6 +372,33 @@ so in a YARD driven by another session the gate holds the turn boundary and
 nothing about authorship. That is why the authorisation above names HELM rather
 than &ldquo;a neighbouring session&rdquo;: no machinery can tell the two apart, so the rule
 has to, and it is written in <code>CLAUDE.md</code> where the committing session reads it.</p>
+<h3 id="where-a-fix-is-made-and-why-size-is-the-wrong-question">Where a fix is made, and why size is the wrong question</h3>
+<p>Until 2026-09-05 the rule sent every engine change to a YARD, &ldquo;typos and
+one-liners included&rdquo;. It produced a queue of fifteen engine defects, almost all
+of them ending &ldquo;belongs in a YARD&rdquo;, and a queue that long is a list of things
+nobody is going to do. The operator ended it that day: a senior developer fixes
+a junior&rsquo;s small mistakes in place, with a note saying who did it, and deferring
+a defect you can already name to a task that may never be created is worse than
+the risk it avoids.</p>
+<p>Size was never the real signal. A one-line edit to <code>.claude/hooks/_dispatch.py</code>
+is more dangerous than two hundred lines of new test, because that file is
+loaded on every tool call: a broken edit disarms the walls of the very session
+making it, and the session that has to notice is the one whose instruments just
+went dark. Meanwhile a line in <code>.gitignore</code> cannot affect anything that is
+running.</p>
+<p>So the question is whether an UNFINISHED edit reaches something LIVE. HELM&rsquo;s
+working tree is not a copy and not a branch awaiting review; it is the code
+executing now, and the daemons, the hooks and the guards all read it directly
+from there. A YARD exists to give an edit a tree where nothing is watching. An
+edit nothing is watching does not need one.</p>
+<p>The two lists are in <code>CLAUDE.md</code> because that is where the session about to make
+the change reads them. The boundary between them is not a taxonomy to memorise:
+it is one question, asked of the specific files in front of you, and answered by
+finding out what imports them. <code>.codegraph/</code> answers that in one call.</p>
+<p>This is the same principle as the daemon rule below, applied to editing rather
+than to running, and it inherits that rule&rsquo;s warning. Do not turn the two lists
+into the rule. They are examples of the question&rsquo;s answer, and the next file
+nobody thought to name is still covered by the question.</p>
 <h3 id="daemons-are-helms-alone">Daemons are HELM&rsquo;s alone</h3>
 <p>Operator directive, 2026-09-03. From a YARD, take no action after which a
 running process on this machine appears, disappears, or changes behaviour. That

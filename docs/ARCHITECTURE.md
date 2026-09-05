@@ -248,6 +248,39 @@ nothing about authorship. That is why the authorisation above names HELM rather
 than "a neighbouring session": no machinery can tell the two apart, so the rule
 has to, and it is written in `CLAUDE.md` where the committing session reads it.
 
+### Where a fix is made, and why size is the wrong question
+
+Until 2026-09-05 the rule sent every engine change to a YARD, "typos and
+one-liners included". It produced a queue of fifteen engine defects, almost all
+of them ending "belongs in a YARD", and a queue that long is a list of things
+nobody is going to do. The operator ended it that day: a senior developer fixes
+a junior's small mistakes in place, with a note saying who did it, and deferring
+a defect you can already name to a task that may never be created is worse than
+the risk it avoids.
+
+Size was never the real signal. A one-line edit to `.claude/hooks/_dispatch.py`
+is more dangerous than two hundred lines of new test, because that file is
+loaded on every tool call: a broken edit disarms the walls of the very session
+making it, and the session that has to notice is the one whose instruments just
+went dark. Meanwhile a line in `.gitignore` cannot affect anything that is
+running.
+
+So the question is whether an UNFINISHED edit reaches something LIVE. HELM's
+working tree is not a copy and not a branch awaiting review; it is the code
+executing now, and the daemons, the hooks and the guards all read it directly
+from there. A YARD exists to give an edit a tree where nothing is watching. An
+edit nothing is watching does not need one.
+
+The two lists are in `CLAUDE.md` because that is where the session about to make
+the change reads them. The boundary between them is not a taxonomy to memorise:
+it is one question, asked of the specific files in front of you, and answered by
+finding out what imports them. `.codegraph/` answers that in one call.
+
+This is the same principle as the daemon rule below, applied to editing rather
+than to running, and it inherits that rule's warning. Do not turn the two lists
+into the rule. They are examples of the question's answer, and the next file
+nobody thought to name is still covered by the question.
+
 ### Daemons are HELM's alone
 
 Operator directive, 2026-09-03. From a YARD, take no action after which a

@@ -135,11 +135,18 @@ to RUN, never to stop you opening the file. That code reaches HELM by ONE route,
 the merge of the task branch, and **that merge must happen before the YARD is
 deleted**.
 
-**Engine work raised in a HELM session:** name the change and its files, then
-stop, and say it belongs in a YARD task, typos and one-liners included. The
-exception is an emergency: if the live workspace is broken and no task can be
-created, make the smallest fix, commit it with an `emergency:` prefix, and say
-the emergency path was used.
+**Engine work raised in a HELM session. The test is not SIZE, it is whether an
+unfinished edit reaches something LIVE**, because this working tree is neither a
+copy nor a branch under review: it is the code executing now. Fix it here, and
+say so in the commit message, when nothing live executes what you touch:
+`.gitignore`, config, docs, tests, new files, any script no daemon is running.
+Take it to a YARD when a half-finished edit would be live in this tree:
+`.claude/hooks/**` (loaded on EVERY tool call, so a broken edit disarms the
+session's own walls), daemon and timer sources, the `scripts/utils/` modules
+they import, the push path, the guards. Deferring a defect you can already name
+is the failure this replaces; why, and the queue that proved it:
+`docs/ARCHITECTURE.md` § 8. Emergencies keep their path: smallest fix,
+`emergency:` prefix, said out loud.
 
 **Guards must be armed inside the task.** Derive the tree a guard looks at from
 the current checkout, never from a constant, the common git directory, or

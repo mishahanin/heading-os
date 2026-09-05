@@ -149,15 +149,26 @@ def pre_push_selection(root: Path) -> list[str] | None:
     The reason is printed on BOTH branches, deliberately. A gate that announced
     only its widenings would be indistinguishable, on a narrowed push, from one
     that had quietly stopped narrowing months ago.
+
+    `flush=True`, because during a push stdout is a PIPE and not a terminal, so
+    these lines are block-buffered and land when this process exits. MEASURED
+    2026-09-05 on the first end-to-end run of the reinstalled hook: the gate line
+    arrived at line 568 of 569, after 307 seconds of pytest output, because the
+    CHILD writing to the same pipe flushes as it goes and the parent does not.
+    Nothing was lost, and the ordering is the whole value: a human waiting on a
+    push needs to know at second zero whether this is the full suite or a
+    selection. `main()` flushes again before it spawns the child, which is the
+    fix at the root — a print added here tomorrow inherits it.
     """
     decision = decide(root, read_ref_lines())
     if decision.full:
-        print(f"{YELLOW}pre-push gate: FULL SUITE, because {decision.reason}{RESET}")
+        print(f"{YELLOW}pre-push gate: FULL SUITE, because {decision.reason}{RESET}",
+              flush=True)
         return None
-    print(f"{CYAN}pre-push gate: narrowed to {decision.reason}{RESET}")
-    print(f"{GRAY}  routes: {', '.join(decision.notes)}{RESET}")
+    print(f"{CYAN}pre-push gate: narrowed to {decision.reason}{RESET}", flush=True)
+    print(f"{GRAY}  routes: {', '.join(decision.notes)}{RESET}", flush=True)
     print(f"{GRAY}  the full suite still runs in CI on this push, and nightly "
-          f"(python scripts/day-mode.py nightly){RESET}")
+          f"(python scripts/day-mode.py nightly){RESET}", flush=True)
     return decision.tests
 
 
@@ -172,6 +183,12 @@ def main() -> int:
     root = Path(__file__).resolve().parent.parent
     selected = pre_push_selection(root) if args.pre_push else None
     cmd = build_command(args.acceptance, selected)
+    # THE ROOT FIX for the ordering above. Everything printed so far belongs
+    # ahead of the child's output, and into a pipe it is block-buffered and does
+    # not. One flush here covers every line printed before this point, including
+    # ones nobody has written yet; per-print `flush=True` covers only the prints
+    # that carry it, which is the shape that decays.
+    sys.stdout.flush()
     proc = subprocess.run(cmd, cwd=str(root), env=child_env())
     if proc.returncode == 0:
         print(f"{GREEN}test gate: PASS{RESET}")

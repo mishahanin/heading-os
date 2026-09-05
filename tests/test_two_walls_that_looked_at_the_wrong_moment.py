@@ -364,8 +364,15 @@ def test_a_secret_in_content_refuses_before_anything_is_committed(tmp_path, monk
             "and cannot stand in for a text-mode call")
         return subprocess.CompletedProcess(args, 1, b"hit", b"")
 
-    monkeypatch.setattr(push_all, "_push_delta_files",
-                        lambda _r, **_k: {"scripts/leak.py"})
+    # `_push_delta_legs`, not `_push_delta_files`: since 2026-09-05 `content_scan`
+    # collects the legs keyed by git state, so the refusal can say what the
+    # scanned set was made of, and takes their union itself. Patching the older
+    # name left the real leg collection running git THROUGH the double below,
+    # which asserts bytes mode about the scanner handoff and has nothing to say
+    # about a text-mode `git rev-parse`. A patch aimed at a name the code no
+    # longer reads is a stub that stands in for nothing.
+    monkeypatch.setattr(push_all, "_push_delta_legs",
+                        lambda _r, **_k: {"untracked": {"scripts/leak.py"}})
     monkeypatch.setattr(push_all.subprocess, "run", _refusing_scanner)
 
     with pytest.raises(SystemExit) as exc:

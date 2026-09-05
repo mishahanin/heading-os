@@ -96,7 +96,8 @@ def test_the_fixture_puts_a_file_in_every_leg(push_all, repo):
     """Without this, every count asserted below could be a zero from an empty
     repository, and the composition line would read as correct while measuring
     nothing."""
-    line = push_all._scan_set_composition(repo, will_commit=True)
+    line = push_all._scan_set_composition(
+        push_all._push_delta_legs(repo, will_commit=True), will_commit=True)
 
     for expected in ("1 committed-unpushed", "1 staged", "1 unstaged",
                      "1 untracked"):
@@ -110,7 +111,8 @@ def test_the_fixture_puts_a_file_in_every_leg(push_all, repo):
 # ============================================================
 
 def test_the_default_mode_names_every_leg_and_why_they_are_there(push_all, repo):
-    line = push_all._scan_set_composition(repo, will_commit=True)
+    line = push_all._scan_set_composition(
+        push_all._push_delta_legs(repo, will_commit=True), will_commit=True)
 
     assert "git add -A" in line, (
         f"the default mode's line does not say WHY the working-tree legs are "
@@ -134,7 +136,8 @@ def test_the_default_mode_names_every_leg_and_why_they_are_there(push_all, repo)
 # ============================================================
 
 def test_no_commit_names_only_the_committed_delta(push_all, repo):
-    line = push_all._scan_set_composition(repo, will_commit=False)
+    line = push_all._scan_set_composition(
+        push_all._push_delta_legs(repo, will_commit=False), will_commit=False)
 
     assert "1 committed-unpushed" in line, (
         f"--no-commit drops the committed delta from its own description, and "
@@ -191,6 +194,45 @@ def test_an_empty_composition_prints_nothing_extra(push_all, capsys):
     assert visible.endswith("about to be pushed."), (
         f"the refusal ends with something other than its own sentence, so an "
         f"empty composition is printing anyway: {out!r}")
+
+
+def test_the_composition_runs_no_subprocess(push_all, repo, monkeypatch):
+    """The regression a SIBLING test caught, pinned here where it belongs.
+
+    The first version of this feature re-ran the git commands from a second copy
+    of the argv. `tests/test_two_walls_that_looked_at_the_wrong_moment.py`
+    replaces `subprocess.run` wholesale with a double that asserts BYTES mode
+    (the scanner handoff is bytes), so those text-mode git calls tripped an
+    assertion written about a completely different call, and the pre-push gate
+    refused the push. MEASURED 2026-09-05: `1 failed, 5890 passed`.
+
+    The deeper defect was the duplication itself: two copies of
+    `--diff-filter=ACMT`, so widening the filter in one would leave the other
+    describing the old scan. Formatting the legs already collected fixes both.
+    """
+    legs = push_all._push_delta_legs(repo, will_commit=True)
+
+    def _no(*_a, **_k):
+        raise AssertionError(
+            "_scan_set_composition ran a subprocess; it must describe the legs "
+            "that were already collected, not walk the repository a second time")
+
+    monkeypatch.setattr(push_all.subprocess, "run", _no)
+    line = push_all._scan_set_composition(legs, will_commit=True)
+    assert "scanned set:" in line
+
+
+def test_the_union_of_the_legs_is_the_scan_set(push_all, repo):
+    """One source, asserted. If the legs and the scanned set ever diverge, the
+    composition describes something other than what was read."""
+    legs = push_all._push_delta_legs(repo, will_commit=True)
+    union = set().union(*legs.values(), set())
+
+    assert union == push_all._push_delta_files(repo, will_commit=True)
+    assert len(union) >= 4, (
+        f"the fixture yields {len(union)} file(s); measured 2026-09-05 it holds "
+        f"four, one per leg, and fewer means this case is comparing two empty "
+        f"sets: {sorted(union)}")
 
 
 def test_content_scan_hands_the_composition_to_the_refusal(push_all):

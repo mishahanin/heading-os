@@ -204,6 +204,28 @@ def _push_delta_files(repo: Path, *, will_commit: bool = True) -> set[str]:
     `_run_scanner` and `engine_content_scan`, which open them by name, so a
     mistranslated name is a file about to be pushed that no scanner ever reads.
     """
+    return set().union(*_push_delta_legs(repo, will_commit=will_commit).values(),
+                       set())
+
+
+def _push_delta_legs(repo: Path, *, will_commit: bool = True
+                     ) -> "dict[str, set[str]]":
+    """The same scan set as `_push_delta_files`, kept apart by GIT STATE.
+
+    One source for both, on purpose. The refusal message names the composition
+    of the scan set (`_scan_set_composition`), and an earlier version of that
+    message re-ran these same git commands from a second copy of the argv. Two
+    copies of `--diff-filter=ACMT` is this repository's dominant defect shape:
+    the day someone widens the filter here, the other copy keeps describing the
+    old one and the description quietly stops matching the scan.
+
+    It also stopped a sibling test dead. `test_two_walls_that_looked_at_the_wrong_moment`
+    replaces `subprocess.run` wholesale with a double that asserts BYTES mode,
+    because the scanner handoff is bytes; the second copy's text-mode git calls
+    went through that double and tripped an assertion written about a different
+    call. Deriving the composition from the legs already collected means the
+    refusal path runs no subprocess at all.
+    """
     have_base = run(
         ["git", "rev-parse", "--verify", "-q", "origin/main"], repo, check=False
     ).returncode == 0
@@ -217,7 +239,7 @@ def _push_delta_files(repo: Path, *, will_commit: bool = True) -> set[str]:
     have_head = run(
         ["git", "rev-parse", "--verify", "-q", "HEAD"], repo, check=False
     ).returncode == 0
-    files: set[str] = set()
+    legs_by_state: dict[str, set[str]] = {}
     if have_base and have_head:
         # `--no-renames`, for the reason `push_history.unpushed_blobs`
         # already gives it. With rename detection on (the git default) a
@@ -242,36 +264,41 @@ def _push_delta_files(repo: Path, *, will_commit: bool = True) -> set[str]:
         # rule holding is a wall with a hole in it, and widening a filter can
         # only ever add files to the scan.
         legs = [
-            ["git", "diff", "-z", "--no-renames", "--name-only",
-             "--diff-filter=ACMT", "origin/main..HEAD"],
+            ("committed-unpushed",
+             ["git", "diff", "-z", "--no-renames", "--name-only",
+              "--diff-filter=ACMT", "origin/main..HEAD"]),
         ]
         if will_commit:
             legs += [
-                ["git", "diff", "-z", "--cached", "--no-renames", "--name-only",
-                 "--diff-filter=ACMT"],
-                ["git", "diff", "-z", "--no-renames", "--name-only",
-                 "--diff-filter=ACMT"],
+                ("staged",
+                 ["git", "diff", "-z", "--cached", "--no-renames", "--name-only",
+                  "--diff-filter=ACMT"]),
+                ("unstaged",
+                 ["git", "diff", "-z", "--no-renames", "--name-only",
+                  "--diff-filter=ACMT"]),
             ]
-        for args in legs:
-            files.update(_z_paths(args, repo))
+        for state, args in legs:
+            legs_by_state[state] = set(_z_paths(args, repo))
     elif not will_commit and have_head:
         # No `origin/main`: the push carries the whole history, so the delta is
         # everything COMMITTED. Tracked-only, because nothing will be staged.
-        files.update(_z_paths(["git", "ls-files", "-z"], repo))
+        legs_by_state["tracked (no origin/main: the push carries the whole "
+                      "history)"] = set(_z_paths(["git", "ls-files", "-z"], repo))
     elif not will_commit:
         # No HEAD and nothing to commit: this invocation can push nothing.
-        return set()
+        return {}
     else:
         # No base, or no HEAD: the index IS the whole delta. `git ls-files`
         # works against an unborn HEAD and lists everything staged, so this
         # branch loses no coverage in either case.
-        files.update(_z_paths(["git", "ls-files", "-z"], repo))
+        legs_by_state["staged"] = set(_z_paths(["git", "ls-files", "-z"], repo))
     if will_commit:
-        files.update(
+        legs_by_state["untracked"] = set(
             _z_paths(["git", "ls-files", "-z", "--others", "--exclude-standard"],
                      repo)
         )
-    return {f for f in files if f}
+    return {state: {f for f in paths if f}
+            for state, paths in legs_by_state.items()}
 
 
 def _run_scanner(paths, cwd: Path, context: str, extra_env=None):
@@ -334,7 +361,8 @@ def _refuse_on_scanner(proc, where: str, composition: str = "") -> None:
         sys.exit(2)
 
 
-def _scan_set_composition(repo: Path, *, will_commit: bool) -> str:
+def _scan_set_composition(legs: "dict[str, set[str]]", *,
+                          will_commit: bool) -> str:
     """One line naming what the refused scan set was made of, by git state.
 
     `.claude/rules/scope-claims.md`, in the wall that rule most protects. The
@@ -349,26 +377,13 @@ def _scan_set_composition(repo: Path, *, will_commit: bool) -> str:
     reading the state took three git commands by hand while the push was
     blocked. Counts, not paths, because the scanner has already printed the
     paths that matter and a second full listing buries them.
+
+    Takes the legs `_push_delta_legs` already collected rather than asking git
+    again. Nothing here runs a subprocess: the counts describe the set that was
+    actually scanned, not a second walk that could disagree with it.
     """
-    def count(args: list[str]) -> int:
-        return len({p for p in _z_paths(args, repo) if p})
-
-    have_base = run(
-        ["git", "rev-parse", "--verify", "-q", "origin/main"], repo, check=False
-    ).returncode == 0
-    have_head = run(
-        ["git", "rev-parse", "--verify", "-q", "HEAD"], repo, check=False
-    ).returncode == 0
-
-    parts = []
-    if have_base and have_head:
-        parts.append(f"{count(['git', 'diff', '-z', '--no-renames', '--name-only', '--diff-filter=ACMT', 'origin/main..HEAD'])} committed-unpushed")
-    elif have_head:
-        parts.append(f"{count(['git', 'ls-files', '-z'])} tracked (no origin/main: the push carries the whole history)")
+    parts = [f"{len(paths)} {state}" for state, paths in legs.items()]
     if will_commit:
-        parts.append(f"{count(['git', 'diff', '-z', '--cached', '--no-renames', '--name-only', '--diff-filter=ACMT'])} staged")
-        parts.append(f"{count(['git', 'diff', '-z', '--no-renames', '--name-only', '--diff-filter=ACMT'])} unstaged")
-        parts.append(f"{count(['git', 'ls-files', '-z', '--others', '--exclude-standard'])} untracked")
         tail = ("the last three legs are here because step 3 runs `git add -A`, "
                 "so they are in the commit a moment later")
     else:
@@ -402,12 +417,13 @@ def content_scan(repo: Path, *, will_commit: bool = True) -> None:
     nothing about an uncommitted edit, and the working tree says nothing about a
     commit already made.
     """
-    files = _push_delta_files(repo, will_commit=will_commit)
+    legs = _push_delta_legs(repo, will_commit=will_commit)
+    files = set().union(*legs.values(), set())
     if files:
         _refuse_on_scanner(
             _run_scanner(files, repo, f"push:{repo.name}"),
             "a file about to be pushed",
-            _scan_set_composition(repo, will_commit=will_commit))
+            _scan_set_composition(legs, will_commit=will_commit))
     history_content_scan(repo)
 
 

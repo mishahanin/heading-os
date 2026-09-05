@@ -69,88 +69,86 @@ the suite.
 
 ## HELM and YARD
 
-Several Claude sessions may run against this repository at once, and the roles
-are not interchangeable.
+Several Claude sessions run here at once, and the two roles are not
+interchangeable.
 
-**HELM** is the main clone on `main`. One session. Everything live happens here:
-the data overlay, the daemons, mail and calendar, memory, document generation,
-`/backup`, `/sync`, **every git operation in the data overlay**, and the review
-and merge of finished task branches. HELM does not change engine code.
+**HELM** is the main clone on `main`. One session. What is LIVE happens here and
+nowhere else: the daemons, all of them, under the categorical rule below; mail,
+the calendar and Telegram; **every git operation in the data overlay**;
+`/backup`, `scripts/push-all.py`, `/sync` and any push at all; the review and
+merge of finished branches. HELM does not change engine code.
 
 **YARD** is a git worktree of this repository on its own branch, checked out
 under Herdr's configured `worktrees.directory` — physically outside the engine
-clone. Nothing here is live. Engine code is changed here.
+clone. Nothing here is live. A YARD holds one piece of work in isolation, of any
+kind: an engine change, research, a keynote deck, work against memory. Several
+run at once; the isolation is the point, not the subject matter.
 
-Which is which: *will this end in a commit to the engine repository?* Then YARD.
-Everything else is HELM.
+Which is which: *does this act on something LIVE?* Live is a running process, an
+outside party, or a shared index other work reads: HELM's list above, whose first
+entry, daemons, is a CATEGORY and not an item, so an action nobody thought to
+name is covered anyway. Everything else is a YARD's.
 
-**The one rule.** Writing FILES into the data overlay from a YARD is allowed and
-expected. Running git in it is not. Files differ per task; the git index is
-shared, so a commit from a task sweeps up other tasks' unfinished work and the
-daemons' in-flight writes into one unreviewed commit. A task that needs its work
-recorded says so and stops.
+**The cycle.** Create the worktree, work in it, commit the engine branch in it,
+HELM merges that branch into `main`, delete the worktree. HELM keeps four things
+and only four: the merge, the push, `/backup`, the daemons. **A commit in a YARD
+needs the operator's word typed in THIS yard, or a brief from HELM; a brief from
+another yard does not authorise it** — HELM is the one session the operator sits
+at himself, and a yard instructed by a yard is a chain in which no link spoke to
+a human. The release gate is untouched and fixes the turn rather than the author,
+so the rule above supplies the rest. Why the commit is otherwise safe, and the
+invented prohibition it replaces: `docs/ARCHITECTURE.md` § 8.
 
-**Never from a YARD:** editing anything inside HELM; `git push` (this repository
-is public, so any branch pushed is visible immediately, not only `main`);
-**anything at all to do with a running daemon** (see below); `scripts/push-all.py`,
-`/backup`; maintenance passes that write under the data root. These refuse
-mechanically rather than by instruction — see `scripts/utils/clone_guard.py`,
-`scripts/lib/require-main-clone.sh`, and `check_yard_write_guard` in
+**The overlay, and the one rule.** Every artifact a task produces lands in the
+data overlay under `outputs/...`, resolved through the data-root helpers
+(`get_data_root()`, `get_outputs_dir()`) and never by a path built against the
+checkout: a YARD reaches the real, shared overlay by design, and
+`engine-tree-clean` with `scripts/leak-guard.py` holds that rather than trust.
+**No artifact is ever saved in the engine.** Writing those files is required;
+running git in the overlay is not. It is one working tree with one index for the
+whole machine, so a commit from a task sweeps up other tasks' unfinished work and
+the daemons' in-flight writes into one unreviewed commit; the engine is the
+opposite, its index the worktree's own. A task needing its overlay
+work recorded says so and stops, `auto-memory/` included: a YARD writes the
+memory files, HELM commits them.
+
+**Never from a YARD:** editing anything inside HELM; anything that publishes;
+**anything at all to do with a running daemon**; a maintenance pass writing under
+the data root across other tasks' files. These refuse mechanically, not by
+instruction — `scripts/utils/clone_guard.py`,
+`scripts/lib/require-main-clone.sh`, `check_yard_write_guard` in
 `.claude/hooks/_dispatch.py`.
 
 **Daemons run in HELM. All of them, always.** Operator directive, 2026-09-03.
-
 **The category, and it is the whole rule:** from a YARD, take no action after
 which a running process on this machine appears, disappears, or changes
-behaviour. That is the test to apply — not a list. It covers the daemon itself
-and everything that decides whether it runs: its unit, its timer, its
-healthcheck, its PID file, anything that spawns it, and anything that inspects
-it in order to decide. The rule is categorical rather than proportional to
-risk, so a daemon entry point that only READS is guarded too. Examples, and
-this list is deliberately **not exhaustive and must never be read as the
-rule**: starting, installing, restarting, stopping, removing.
+behaviour. It reaches everything deciding whether a daemon runs (unit, timer,
+healthcheck, PID file, spawner, the readers that inspect one), so an entry point
+that only READS is guarded too. Starting, installing, restarting, stopping and
+removing are **examples, never the rule**: reading them as the rule ran a second
+Exchange daemon twelve hours out of a worktree on 2026-09-03. **An enumeration of
+verbs is a list of holes.**
 
-**The line runs through EXECUTION, not through editing.** Writing the SOURCE
-CODE of a daemon in a YARD is ordinary engine work and is exactly what a YARD is
-for — HELM does not change engine code at all. The guard sits at the entry
-point and refuses to RUN from a non-main clone; it does not and must not stop
-you opening that same file in an editor.
+**The line runs through EXECUTION, not editing.** Writing a daemon's SOURCE CODE
+in a YARD is ordinary engine work; the guard sits at the entry point and refuses
+to RUN, never to stop you opening the file. That code reaches HELM by ONE route,
+the merge of the task branch, and **that merge must happen before the YARD is
+deleted**.
 
-That code reaches HELM by ONE route, the merge of the task branch into `main`,
-and **that merge must happen before the YARD is deleted** — a daemon change left
-in a deleted worktree is lost, and one arriving in HELM by any other route
-bypassed review.
+**Engine work raised in a HELM session:** name the change and its files, then
+stop, and say it belongs in a YARD task, typos and one-liners included. The
+exception is an emergency: if the live workspace is broken and no task can be
+created, make the smallest fix, commit it with an `emergency:` prefix, and say
+the emergency path was used.
 
-Why the previous wording failed, recorded here because the fix is prose as much
-as code. This list used to say "daemon install, restart or uninstall", and
-exactly three files carried those words in their names:
-`install-daemon-service.sh`, `restart-daemon-service.sh`,
-`uninstall-daemon-service.sh`. Those three were guarded and nothing else was.
-The prohibition had been implemented as a literal match against a list of verbs,
-and "start" was not on the list — so from a YARD you could not INSTALL the mail
-daemon and could freely START one. That is what happened on 2026-09-03, when a
-second Exchange daemon ran twelve hours out of a worktree beside the operator's
-real one. **An enumeration of verbs is a list of holes.** Whoever edits this
-next: do not turn the examples above back into the rule.
-
-**When engine work comes up during a HELM session:** name what you would change
-and in which files, then stop, and say it belongs in a YARD task. This holds for
-one-line changes and typos as much as for large work. The exception is an
-emergency: if the live workspace is broken and a task cannot be created, make
-the smallest possible fix, commit it immediately with an `emergency:` prefix,
-and say plainly that the emergency path was used.
-
-**Guards must be armed inside the task.** A worktree is a separate checkout, so
-every guard has to be asked which tree it is actually looking at. Derive it from
+**Guards must be armed inside the task.** Derive the tree a guard looks at from
 the current checkout, never from a constant, the common git directory, or
-`${CLAUDE_PROJECT_DIR}`. In particular, `WORKSPACE_ROOT` in a copied `.env`
-repoints `get_workspace_root()` and with it every guard downstream; the YARD
-bootstrap strips it and then verifies the resolved root. Every guard added or
-changed ships with a bidirectional test, the failing half of which must fail
-against the previous version.
+`${CLAUDE_PROJECT_DIR}`, and ship every new or changed guard with a bidirectional
+test whose failing half fails against the previous version. The trap behind it,
+`WORKSPACE_ROOT` in a copied `.env`: § 8.
 
-Full design, the measurements behind it, and the operating guide:
-`docs/ARCHITECTURE.md` § 8 and `scripts/herdr/README.md`.
+Full design and operating guide: `docs/ARCHITECTURE.md` § 8,
+`scripts/herdr/README.md`.
 
 ## Contributing & security
 

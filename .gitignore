@@ -122,6 +122,14 @@ outputs/browser/firecrawl-cache/
 # tell every other clone a full run had succeeded there when none had.
 .cache/day-mode/
 
+# The nightly's own run record (scripts/nightly-refresh.py). Same reason as the
+# marker above and it was missed when that job landed: it names the revision
+# THIS machine's nightly last ran on, so a committed copy tells every other
+# clone about a run that never happened there. Caught 2026-09-05 by
+# tests/test_a_cache_store_whose_ignore_rule_was_remembered.py, which derives
+# the paths from the source rather than from whatever happens to be on disk.
+.cache/nightly-refresh/
+
 # Day-mode test verdict cache (scripts/test-cache.py). Machine-local and
 # rebuildable: it records which test files passed against which content hash of
 # this working tree, so it is meaningless in any other checkout. It must stay

@@ -399,6 +399,30 @@ finding out what imports them. <code>.codegraph/</code> answers that in one call
 than to running, and it inherits that rule&rsquo;s warning. Do not turn the two lists
 into the rule. They are examples of the question&rsquo;s answer, and the next file
 nobody thought to name is still covered by the question.</p>
+<p><strong>The push path was one word in that list and it held two answers.</strong> &ldquo;The push
+path&rdquo; reads like a category of file. It is not; it is a mix, and the divider is
+who can execute the file while you are still typing. Your own <code>git push</code> cannot,
+and push and <code>/backup</code> happen only in HELM, which is one session. A timer can,
+on its own schedule, with nobody watching. <code>scripts/install-git-hooks.py</code> is
+therefore HELM&rsquo;s, while <code>scripts/utils/day_mode.py</code> and <code>scripts/run-tests.py</code>
+are a YARD&rsquo;s, the nightly importing the first and executing the second at 01:30.</p>
+<p>That split was first written the other way round, with the test gate on the HELM
+side, from a <code>grep</code> whose hits were read as prose without the file being opened.
+<code>scripts/nightly-refresh.py:393</code> builds <code>[sys.executable, root / "scripts" /
+"run-tests.py"]</code>. The mistake is worth keeping in the record because of what
+caught it: <code>tests/test_the_push_path_splits_on_who_runs_it.py</code>, written in the
+same change to defend the sentence, went red on its own author within minutes of
+being written. A rule that names files is a hand-kept list, and the fix for a
+hand-kept list is a net derived from the tree — here, the installed systemd
+units, so a timer added tomorrow is followed without anyone editing a paragraph.</p>
+<p>Two smaller things that net taught, both worth carrying to the next one. Asking
+the import graph proves nothing about a kebab-named script, because no <code>import</code>
+statement can ever name one: &ldquo;not in the closure&rdquo; is true of <code>run-tests.py</code>
+forever, and a guard that cannot fail is not a guard. And matching a path by
+CONTAINMENT anchored the check on three operator messages reading &ldquo;Reproduce:
+python scripts/run-tests.py&rdquo; rather than on the two places that actually spawn
+it; equality against the basename or the repo-relative path is what separates a
+call from a sentence about a call.</p>
 <h3 id="daemons-are-helms-alone">Daemons are HELM&rsquo;s alone</h3>
 <p>Operator directive, 2026-09-03. From a YARD, take no action after which a
 running process on this machine appears, disappears, or changes behaviour. That

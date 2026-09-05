@@ -281,6 +281,33 @@ than to running, and it inherits that rule's warning. Do not turn the two lists
 into the rule. They are examples of the question's answer, and the next file
 nobody thought to name is still covered by the question.
 
+**The push path was one word in that list and it held two answers.** "The push
+path" reads like a category of file. It is not; it is a mix, and the divider is
+who can execute the file while you are still typing. Your own `git push` cannot,
+and push and `/backup` happen only in HELM, which is one session. A timer can,
+on its own schedule, with nobody watching. `scripts/install-git-hooks.py` is
+therefore HELM's, while `scripts/utils/day_mode.py` and `scripts/run-tests.py`
+are a YARD's, the nightly importing the first and executing the second at 01:30.
+
+That split was first written the other way round, with the test gate on the HELM
+side, from a `grep` whose hits were read as prose without the file being opened.
+`scripts/nightly-refresh.py:393` builds `[sys.executable, root / "scripts" /
+"run-tests.py"]`. The mistake is worth keeping in the record because of what
+caught it: `tests/test_the_push_path_splits_on_who_runs_it.py`, written in the
+same change to defend the sentence, went red on its own author within minutes of
+being written. A rule that names files is a hand-kept list, and the fix for a
+hand-kept list is a net derived from the tree — here, the installed systemd
+units, so a timer added tomorrow is followed without anyone editing a paragraph.
+
+Two smaller things that net taught, both worth carrying to the next one. Asking
+the import graph proves nothing about a kebab-named script, because no `import`
+statement can ever name one: "not in the closure" is true of `run-tests.py`
+forever, and a guard that cannot fail is not a guard. And matching a path by
+CONTAINMENT anchored the check on three operator messages reading "Reproduce:
+python scripts/run-tests.py" rather than on the two places that actually spawn
+it; equality against the basename or the repo-relative path is what separates a
+call from a sentence about a call.
+
 ### Daemons are HELM's alone
 
 Operator directive, 2026-09-03. From a YARD, take no action after which a

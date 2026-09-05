@@ -143,10 +143,24 @@ say so in the commit message, when nothing live executes what you touch:
 Take it to a YARD when a half-finished edit would be live in this tree:
 `.claude/hooks/**` (loaded on EVERY tool call, so a broken edit disarms the
 session's own walls), daemon and timer sources, the `scripts/utils/` modules
-they import, the push path, the guards. Deferring a defect you can already name
+they import, the guards. Deferring a defect you can already name
 is the failure this replaces; why, and the queue that proved it:
 `docs/ARCHITECTURE.md` § 8. Emergencies keep their path: smallest fix,
 `emergency:` prefix, said out loud.
+
+**The push path splits on WHO RUNS IT, not on what the file is called.** Ask:
+can anything but your own typed command execute this file before you have
+finished it? Your own `git push` cannot, and push and `/backup` happen only in
+HELM, which is one session; a timer can, on its own schedule, with nobody
+watching. So `scripts/install-git-hooks.py` is fixed here, while
+`scripts/utils/day_mode.py` and `scripts/run-tests.py` are a YARD's: the nightly
+imports the first and EXECUTES the second at 01:30. Those are examples OF THE
+QUESTION and never the list, and the second one is why that sentence is here at
+all: it was written the other way round, from a grep whose hits were read as
+prose, and `tests/test_the_push_path_splits_on_who_runs_it.py` went red on its
+own author. That test derives the reachable set from the systemd units rather
+than from this paragraph, so the day a timer reaches one more of them, the
+answer changes without anyone renaming anything.
 
 **Guards must be armed inside the task.** Derive the tree a guard looks at from
 the current checkout, never from a constant, the common git directory, or

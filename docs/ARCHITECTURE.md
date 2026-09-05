@@ -166,31 +166,87 @@ and windows are not walls.
 
 The answer is two roles with no overlap.
 
-**HELM** is the main clone on `main`. One session. Everything live: the data
-overlay, the daemons, mail and calendar, memory, `/backup`, `/sync`, every git
-operation in the data overlay, and the review and merge of finished branches.
+**HELM** is the main clone on `main`. One session. What is live: the daemons,
+mail and the calendar and Telegram, every git operation in the data overlay,
+`/backup`, `/sync` and any push at all, and the review and merge of finished
+branches.
 
 **YARD** is a git worktree of the engine on its own branch, checked out under
 Herdr's `worktrees.directory` — outside the engine clone, so a file created by
 accident inside a task cannot land in the engine's working tree. Herdr lays the
 checkouts out as `<directory>/<repo>/<branch-slug>`, and that middle segment is
 its own, not configurable: `worktrees.directory` is the only key under
-`worktrees.` in the 0.8.2 configuration reference. Nothing here is live. The
-engine can be taken apart here while HELM keeps running on the merged version.
+`worktrees.` in the 0.8.2 configuration reference. Nothing here is live. A YARD
+holds one piece of work in isolation, whatever the work is: an engine change, a
+research task, a keynote deck, a program being built, work against memory.
+Several run at once, doing different kinds of work, and the engine can be taken
+apart in one of them while HELM keeps running on the merged version.
 
-*Are you using the assistant, or rebuilding it?* Using is HELM. Rebuilding is
-YARD. Cooking dinner and rebuilding the stove are different activities even
-though both happen in the kitchen; the second you do with the gas off.
+*Does this act on something live?* Live means a running process, an outside
+party, or a shared index that other work reads, which is the list HELM holds
+above. Everything else runs in a YARD.
 
 ### The one rule
 
-**Anyone may write files into the data overlay. Only HELM may record its
-history.**
+**Every task writes its files into the data overlay. Only HELM may record the
+OVERLAY's history.** The engine branch is a different question, answered in the
+subsection below: the task commits that itself.
 
 Files differ per task, so they do not collide. What collides is the moment of
-recording: the overlay has one git index shared by HELM and every worktree, so a
-commit from a task sweeps up a neighbour's half-finished draft and whatever the
-mail sync is writing at that instant into a single commit nobody reviewed.
+recording: the overlay is one working tree with one git index for the whole
+machine, so a commit from a task sweeps up a neighbour's half-finished draft and
+whatever the mail sync is writing at that instant into a single commit nobody
+reviewed.
+
+The first half is an obligation, not a permission. No artifact is ever saved in
+the engine: a research result, a document, a deck, a plan, a note all land in
+the overlay under `outputs/...`, resolved through `get_data_root()` and the
+`get_*_dir()` helpers rather than a path assembled against the checkout. A YARD
+reaches the real, shared overlay by design, which is what makes the obligation
+possible: the bootstrap copies `.env` from HELM, strips `WORKSPACE_ROOT`, writes
+an absolute `HEADING_OS_DATA`, and asserts at step 7 that the resolved root sits
+outside the checkout. The `engine-tree-clean` pre-commit hook fails a commit
+that leaves a data artifact in the engine clone, and `scripts/leak-guard.py`
+refuses a hardcoded data path in engine code.
+
+### The cycle, and why a task commits its own branch
+
+Create the worktree, work in it, commit the engine branch in it, HELM merges the
+branch into `main`, delete the worktree. HELM keeps the merge, the push,
+`/backup` and the daemons; the rest is the task's. The commit needs the
+operator's word typed in that yard, or a brief from HELM, and nothing else
+authorises it: HELM is the one session the operator sits at himself, so a yard
+instructed by another yard is a chain in which no link spoke to a human. The
+release gate is unchanged, and it is not that authorisation: it asks for a typed
+word in the current turn of the committing session, which fixes the turn and
+never the author.
+
+This is written out because the place where it belonged said nothing, and on
+2026-09-04 and 05 the silence was filled with an invented prohibition: task
+branches were committed from HELM by hand with `git -C <yard> commit` and the
+practice was recorded in commit messages as policy. No rule said it, in
+`CLAUDE.md` or in `.claude/hooks/_dispatch.py`. Four properties make the commit
+safe, each MEASURED 2026-09-05 on this repository from a YARD:
+
+| Property | How it was checked | Result |
+|---|---|---|
+| A worktree has its own index, and a branch belongs to one worktree | `git rev-parse --git-path index`; `git worktree list` | `<HELM>/.git/worktrees/<id>/index`, one per checkout, six live worktrees on six distinct branches |
+| Hooks are the shared clone's, so the gates are the same ones | `git rev-parse --git-path hooks`; `scripts/install-hooks.py --check` | resolves to `<HELM>/.git/hooks`; the framework gate reports ARMED |
+| The release gate does not soften in a worktree | read `check_release_gate` in `.claude/hooks/_dispatch.py` | no clone-type branch in it: approval of the WORK is never approval of the commit |
+| Publishing is off by machinery | `git remote -v` | push URL is `DISABLED://use-helm-to-publish`, set per worktree at step 3 of `yard-bootstrap.sh` |
+
+The first row is git's own behaviour and the guard in `_dispatch.py` refuses
+`git worktree add` from a YARD, so the two-worktrees-one-branch case cannot be
+demonstrated from inside a task; the registry listing is the evidence available
+there.
+
+What the third row does NOT say: the gate confirms that the session's most
+recent prompt asked for a commit in this turn, not that a human at this machine
+typed it. A brief arriving from a neighbouring session is recorded the same way,
+so in a YARD driven by another session the gate holds the turn boundary and
+nothing about authorship. That is why the authorisation above names HELM rather
+than "a neighbouring session": no machinery can tell the two apart, so the rule
+has to, and it is written in `CLAUDE.md` where the committing session reads it.
 
 ### Daemons are HELM's alone
 

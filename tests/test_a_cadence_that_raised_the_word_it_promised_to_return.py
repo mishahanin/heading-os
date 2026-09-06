@@ -210,9 +210,18 @@ def test_a_healthy_thread_tree_is_counted_in_silence(cadence, tmp_path, capsys):
 # this file's floor asks about every reader in the module, not only the broken
 # ones, and an exemption that is not written down is an exemption nobody can
 # check.
+#
+# `viraid_source_state` joined on 2026-09-06 and degrades DOWNWARD on purpose:
+# it reports what the VIRAID store holds so that a `viraid: 0` can be read, and
+# a store it cannot open returns `{"messages": None, "newest": None}` rather
+# than a count. None is "not established"; 0 is a measurement, and an empty
+# store legitimately returns 0. It stays SILENT about the failure because
+# `count_viraid` reads the same file one function above and already names it in
+# `skipped`; a second copy of the same complaint on the same run is noise, and
+# the whole point of `skipped` is that one place owns it.
 GUARDED = ["read_marker", "marker_state", "read_reflect_marker",
            "count_threads", "count_crm", "count_viraid",
-           "analyze_reflect_clusters"]
+           "analyze_reflect_clusters", "viraid_source_state"]
 
 
 @pytest.mark.parametrize("func", GUARDED)

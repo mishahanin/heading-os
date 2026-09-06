@@ -576,5 +576,139 @@ def test_an_unreadable_marker_leaves_everything_unreviewed():
     assert oc._is_unreviewed(block, "") is True
 
 
+def test_the_two_zeros_of_a_cluster_count_are_told_apart(tmp_path):
+    """`count == 0` has two causes that ask for opposite actions.
+
+    `analyze_reflect_clusters` walks past a component either because fewer than
+    two raw episodes share `CLUSTER_MIN_SHARED` tags, so no cluster formed at
+    all, or because every member predates `.last-reflect` and the CEO has looked
+    at it already. Both land on the same 0, and until 2026-09-06 nothing
+    downstream could tell them apart: the radar row said `0 clusters` for
+    twenty-six days over a brain whose reflect side was CURRENT, which reads as
+    the empty case and is the good one.
+
+    The failing half of this test is the first assertion pair: against the
+    previous version `analyze_reflect_clusters` returns no `reviewed_count` key
+    at all, so both lookups raise KeyError. The `count` assertions below it pass
+    on both versions, which is precisely why they were never enough.
+    """
+    def brain(episodes, last_reflect=None):
+        root = tmp_path / f"b{len(list(tmp_path.iterdir()))}"
+        if last_reflect:
+            _write(root, "knowledge/odin-brain/.last-reflect", last_reflect)
+        for i, (ents, kws) in enumerate(episodes):
+            _write(root, f"knowledge/odin-brain/episodes/e{i}.md",
+                   _episode(f"e{i}", "raw", ents, kws, created="2026-01-05"))
+        return root
+
+    # Three shared tags is CLUSTER_MIN_SHARED, so this pair forms one component.
+    paired = [(["a", "x"], ["k1"]), (["a", "x"], ["k1"])]
+    # Disjoint tags: no component of size >= 2 exists to begin with.
+    disjoint = [(["a", "b"], ["k1"]), (["c", "d"], ["k2"])]
+
+    reviewed = oc.analyze_reflect_clusters(brain(paired, last_reflect="2026-06-01"))
+    none_formed = oc.analyze_reflect_clusters(brain(disjoint))
+
+    assert reviewed["reviewed_count"] == 1, (
+        "a cluster the CEO has already seen must be COUNTED on the way past, "
+        f"not merely skipped: {reviewed}")
+    assert none_formed["reviewed_count"] == 0, (
+        "nothing clustered here, so there is nothing reviewed to report: "
+        f"{none_formed}")
+
+    assert reviewed["count"] == 0 and none_formed["count"] == 0, (
+        "both states must still report zero reflect-ready clusters; the fix "
+        "adds a discriminator beside that zero, it does not change it")
+    assert reviewed["reviewed_count"] != none_formed["reviewed_count"], (
+        "the two zeros are indistinguishable again")
+
+
+def test_a_viraid_zero_says_whether_the_source_is_quiet_or_empty(tmp_path):
+    """`viraid: 0` covered three worlds and named none of them.
+
+    `count_viraid` reports how many messages are admissible since the marker. A
+    store holding 77 messages whose newest predates the marker by a month, and a
+    store holding nothing at all, and a store this code cannot read, all
+    produced a bare 0. Only the third reached `skipped`. MEASURED 2026-09-06
+    against the live overlay: 77 held, newest 2026-07-11, marker 2026-08-11,
+    reported as `viraid: 0` with `skipped` empty.
+
+    Against the previous version `viraid_source_state` does not exist, so this
+    test fails at the attribute lookup. The distinction it pins is the one
+    between an EMPTY store and an UNREADABLE one, which the old code also
+    collapsed: both were 0.
+    """
+    def store(payload: bytes) -> Path:
+        root = tmp_path / f"s{len(list(tmp_path.iterdir()))}"
+        state = root / oc.VIRAID_STATE
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_bytes(payload)
+        return root
+
+    held = store(json.dumps({"messages": {
+        "1": {"date": "2026-07-11T09:00:00", "disposition": "note"},
+        "2": {"date": "2026-06-02", "disposition": "ignored"},
+        "3": {"date": "2026-07-01", "disposition": "task"},
+    }}).encode())
+    assert oc.viraid_source_state(held) == {"messages": 3, "newest": "2026-07-11"}, (
+        "the store's own newest date is what makes a zero readable")
+
+    empty = store(json.dumps({"messages": {}}).encode())
+    assert oc.viraid_source_state(empty) == {"messages": 0, "newest": None}
+
+    absent = tmp_path / "no-store-here"
+    unreadable = store(b"\xe9\xff not utf-8")
+    assert oc.viraid_source_state(absent) == {"messages": None, "newest": None}
+    assert oc.viraid_source_state(unreadable) == {"messages": None, "newest": None}
+
+    assert oc.viraid_source_state(empty) != oc.viraid_source_state(unreadable), (
+        "a store holding nothing and a store nobody can read are different "
+        "answers; None is 'not established', 0 is a measurement")
+
+    # Wrong shape parses cleanly and must not be guessed at.
+    assert oc.viraid_source_state(store(b'{"messages": ["oops"]}')) == {
+        "messages": None, "newest": None}
+    assert oc.viraid_source_state(store(b'null')) == {
+        "messages": None, "newest": None}
+
+
+def test_the_nudge_line_names_a_quiet_viraid_feed(tmp_path):
+    """A feed that stopped must not read as a feed with nothing new.
+
+    `suggestion_line` said `0 VIRAID` and stopped. The sentence is added only
+    when the count is zero AND the store was readable AND it holds something AND
+    its newest message predates the collect marker, so a healthy zero stays
+    silent.
+    """
+    base = {
+        "nudge": True, "days_since": 26, "last_collect": "2026-08-11",
+        "unharvested_total": 144,
+        "by_source": {"thread": 127, "crm": 17, "viraid": 0},
+        "reflect_clusters": 0, "stale_clusters": 0, "oldest_cluster_age_days": None,
+    }
+
+    quiet = oc.suggestion_line({**base, "viraid_source": {
+        "messages": 77, "newest": "2026-07-11"}})
+    assert "VIRAID quiet since 2026-07-11" in quiet and "77 messages held" in quiet, quiet
+
+    # Newest message is AFTER the marker: the zero is the gate's doing, not an
+    # outage, and the line must not accuse the feed.
+    gated = oc.suggestion_line({**base, "viraid_source": {
+        "messages": 77, "newest": "2026-08-30"}})
+    assert "quiet" not in gated, gated
+
+    for silent in ({"messages": 0, "newest": None},
+                   {"messages": None, "newest": None}):
+        assert "quiet" not in oc.suggestion_line({**base, "viraid_source": silent})
+    # A payload from before the field existed must not crash the line.
+    assert "quiet" not in oc.suggestion_line(dict(base))
+
+    # A non-zero VIRAID count never carries the sentence, whatever the store says.
+    counted = oc.suggestion_line({
+        **base, "by_source": {"thread": 127, "crm": 17, "viraid": 4},
+        "viraid_source": {"messages": 77, "newest": "2026-07-11"}})
+    assert "quiet" not in counted, counted
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

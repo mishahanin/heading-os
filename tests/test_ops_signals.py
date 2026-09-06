@@ -224,6 +224,47 @@ def test_odin():
     _check("odin stale cluster -> high", s["severity"] == "high")
 
 
+def test_the_radar_row_says_which_zero_it_found():
+    """`0 clusters` is two states, and the row said one sentence for both.
+
+    "No component of two or more raw episodes formed" and "every component that
+    formed was already reviewed" are opposite conclusions. The second is the
+    good outcome and it was rendered, daily, as the empty one. MEASURED
+    2026-09-06: two clusters of three episodes each, reviewed 2026-08-11,
+    deliberately not graduated, reported as `odin: 144 un-harvested, 0 clusters`
+    for twenty-six days.
+
+    The failing half against the previous version is the inequality at the end:
+    it built the identical string for both payloads.
+    """
+    base = {"nudge": True, "unharvested_total": 144, "reflect_clusters": 0,
+            "stale_clusters": 0}
+
+    seen = ops.classify_odin({**base, "reviewed_clusters": 2})["summary"]
+    none_formed = ops.classify_odin({**base, "reviewed_clusters": 0})["summary"]
+
+    _check("a reviewed cluster is named", "2 reviewed" in seen)
+    _check("an empty brain is named", "none formed" in none_formed)
+    _check("the two zeros no longer share a sentence", seen != none_formed)
+    _check("both still report zero reflect-ready clusters",
+           "0 clusters" in seen and "0 clusters" in none_formed)
+
+    # A cadence dict from before the field existed asserts nothing either way.
+    # `.get` returning None, not 0, is what keeps "none formed" off this line.
+    legacy = ops.classify_odin(base)["summary"]
+    _check("a legacy payload gets no qualifier", legacy.endswith("0 clusters"))
+    _check("a legacy payload is not called empty", "none formed" not in legacy)
+    _check("the missing field is carried as unknown",
+           ops.classify_odin(base)["value"]["reviewed"] is None)
+
+    # With real clusters the line is unchanged: the qualifier is a zero-only
+    # discriminator and must not displace the stale count.
+    live = ops.classify_odin({**base, "reflect_clusters": 3, "stale_clusters": 1,
+                              "reviewed_clusters": 2})["summary"]
+    _check("a live cluster keeps its stale count", live.endswith("3 clusters (1 stale)"))
+    _check("a live cluster does not report reviewed", "reviewed" not in live)
+
+
 def test_queue():
     s = ops.classify_queue(0, 0)
     _check("queue empty -> not due", not s["due"] and s["severity"] == "ok")

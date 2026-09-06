@@ -457,6 +457,52 @@ def count_viraid(root: Path, since: str, skipped: list) -> int:
     return n
 
 
+def viraid_source_state(root: Path) -> dict:
+    """What the VIRAID store HOLDS, so that a `viraid: 0` can be read.
+
+    `count_viraid` answers one question: how many messages are admissible since
+    the marker. It returns a bare 0 for three different worlds. Every newer
+    message was gated out; no message is newer than the marker; and the source
+    has produced nothing at all for weeks. The first two are the cadence's
+    business and the third is an outage in a feed nobody watches, and all three
+    looked identical, because `skipped` only records a store this code could not
+    READ.
+
+    MEASURED 2026-09-06 against the live overlay: 77 messages in the store, the
+    newest dated 2026-07-11, a month BEFORE the 2026-08-11 collect marker.
+    Reported as `viraid: 0` with an empty `skipped`, which is arithmetically
+    correct and says the opposite of what the operator would conclude from it.
+
+    Returns ``{"messages": int|None, "newest": str|None}``. None means the store
+    could not be read or parsed; `count_viraid` already names that in `skipped`,
+    and this function deliberately does not add a second copy of the complaint.
+    An empty store is ``{"messages": 0, "newest": None}``, which is not the same
+    answer and must not be collapsed into it.
+    """
+    state_path = root / VIRAID_STATE
+    if not state_path.exists():
+        return {"messages": None, "newest": None}
+    try:
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # Same two-clause shape, and the same reason, as `count_viraid` above:
+        # a torn write surfaces as UnicodeDecodeError, a ValueError sibling of
+        # JSONDecodeError rather than a subclass. Swallowed rather than logged
+        # because the caller records it once already.
+        return {"messages": None, "newest": None}
+    messages = data.get("messages") if isinstance(data, dict) else None
+    if not isinstance(messages, dict):
+        # Valid JSON of the wrong shape. `count_viraid` reaches the same state
+        # through `data.get("messages", {})` returning a non-dict and dying on
+        # `.items()`; this one refuses to guess instead.
+        return {"messages": None, "newest": None}
+    dates = sorted(
+        d for d in ((m.get("date") or "")[:10] for m in messages.values()
+                    if isinstance(m, dict)) if d
+    )
+    return {"messages": len(messages), "newest": dates[-1] if dates else None}
+
+
 # ============================================================
 # (c) Reflect-ready clusters (connected components over raw episodes)
 # ============================================================
@@ -532,6 +578,14 @@ def analyze_reflect_clusters(root: Path, today: date | None = None) -> dict[str,
     reviewed. Transitive A-B-C membership is intended. Returns:
 
       count            -- clusters carrying at least one UNREVIEWED episode
+      reviewed_count   -- clusters that FORMED but carry nothing unreviewed, so
+                          they are not counted above. Reported because `count`
+                          alone cannot tell "no cluster formed" from "the CEO
+                          looked at every one already", and those two zeros ask
+                          for opposite actions: the first says the brain has no
+                          clusterable material, the second says the reflect side
+                          is current. The radar row rendered both as
+                          `0 clusters` until 2026-09-06.
       stale_count      -- of those, the ones whose oldest unreviewed episode has
                           waited >= STALE_CLUSTER_DAYS
       oldest_age_days  -- longest such wait (None when none datable)
@@ -559,7 +613,8 @@ def analyze_reflect_clusters(root: Path, today: date | None = None) -> dict[str,
     if today is None:
         today = datetime.now(get_default_tz()).date()
     base = root / EPISODES_DIR
-    empty = {"count": 0, "stale_count": 0, "oldest_age_days": None, "ages": [], "clusters": []}
+    empty = {"count": 0, "reviewed_count": 0, "stale_count": 0,
+             "oldest_age_days": None, "ages": [], "clusters": []}
     if not base.is_dir():
         return empty
 
@@ -609,12 +664,17 @@ def analyze_reflect_clusters(root: Path, today: date | None = None) -> dict[str,
 
     ages: list[int | None] = []
     clusters: list[dict[str, Any]] = []
+    reviewed_count = 0
     for idxs in members.values():
         if len(idxs) < 2:
             continue
         unreviewed = [i for i in idxs if nodes[i][3]]
         if not unreviewed:
-            continue  # the CEO has already seen every member; not a nudge
+            # The CEO has already seen every member; not a nudge. COUNTED on the
+            # way past, because this `continue` and the one above it both land on
+            # the same 0 downstream and mean opposite things.
+            reviewed_count += 1
+            continue
         waits = [nodes[i][1] for i in unreviewed if nodes[i][1] is not None]
         age = max(waits) if waits else None  # the oldest thing not yet looked at
         ages.append(age)
@@ -638,6 +698,7 @@ def analyze_reflect_clusters(root: Path, today: date | None = None) -> dict[str,
     datable = [a for a in ages if a is not None]
     return {
         "count": len(ages),
+        "reviewed_count": reviewed_count,
         "stale_count": sum(1 for a in datable if a >= STALE_CLUSTER_DAYS),
         "oldest_age_days": max(datable) if datable else None,
         "ages": ages,
@@ -712,7 +773,9 @@ def compute(root: Path, min_entries: int, today: date | None = None) -> dict[str
         "days_since": days_since,
         "unharvested_total": total,
         "by_source": {"thread": thread_n, "crm": crm_n, "viraid": viraid_n},
+        "viraid_source": viraid_source_state(root),
         "reflect_clusters": clusters,
+        "reviewed_clusters": ca["reviewed_count"],
         "stale_clusters": ca["stale_count"],
         "oldest_cluster_age_days": ca["oldest_age_days"],
         "cluster_detail": ca["clusters"],
@@ -796,6 +859,21 @@ def suggestion_line(r: dict[str, Any], report_rel: str | None = None) -> str:
         if r.get("stale_clusters"):
             seg += f" ({r['stale_clusters']} stale, oldest {r['oldest_cluster_age_days']}d)"
         parts.append(seg)
+
+    # A `0 VIRAID` beside a store whose newest message predates the marker is not
+    # "nothing new since the collect", it is a feed that stopped. The count alone
+    # cannot say which, so the store's own newest date is put beside it and the
+    # reader decides. Said only when the count IS zero and the store was readable
+    # and holds something: a zero explained by an empty store needs no sentence,
+    # and an unreadable one is already in `skipped`.
+    src = r.get("viraid_source") or {}
+    marker = (r.get("last_collect") or "")[:10]
+    if (not bs.get("viraid") and src.get("messages") and src.get("newest")
+            and marker and src["newest"] < marker):
+        parts.append(
+            f"VIRAID quiet since {src['newest']} "
+            f"({src['messages']} messages held, none after the marker)"
+        )
 
     tail = []
     if total:

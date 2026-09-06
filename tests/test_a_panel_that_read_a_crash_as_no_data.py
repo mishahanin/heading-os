@@ -396,7 +396,15 @@ def test_the_radar_still_reads_a_healthy_cadence_child(tmp_path, monkeypatch):
     signal = ops.odin_cadence_state(tmp_path)
     assert signal["due"] is True
     assert signal["severity"] == "high"
-    assert signal["value"] == {"unharvested": 12, "clusters": 2, "stale": 1}
+    # `reviewed` is None, not 0, and that is the assertion. This fixture is a
+    # cadence payload with no `reviewed_clusters` key, which is what every
+    # payload written before 2026-09-06 looks like; `classify_odin` reports
+    # None there rather than claiming zero clusters were reviewed. Pinning the
+    # whole dict is deliberate: it is the second copy of this assertion, and the
+    # first one (tests/test_ops_signals.py) was updated alone when the field
+    # was added.
+    assert signal["value"] == {
+        "unharvested": 12, "clusters": 2, "reviewed": None, "stale": 1}
 
 
 def test_the_dashboard_no_longer_spawns_the_cadence_child_itself(dash):

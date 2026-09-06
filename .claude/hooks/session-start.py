@@ -30,20 +30,35 @@ def _load_checkpoint_paths():
     which is not this fix's business. Measured 2026-08-31: 0.021 s, and it is
     spent only on the exec-workspace path that needs it.
     """
+    def _import():
+        from scripts.utils import checkpoint_paths
+        return checkpoint_paths
+
+    return _load_engine_module(
+        "scripts/utils/checkpoint_paths.py", "checkpoint_paths", _import,
+        "the workspace-update marker is read and rewritten unserialised")
+
+
+def _load_engine_module(relpath, label, importer, consequence):
+    """The walk-and-import shape `_load_checkpoint_paths` used to carry alone.
+
+    Extracted when a second optional helper arrived
+    (`scripts/utils/yard_sessions.py`), because the copy is the one that stops
+    being fixed. `consequence` is what the operator loses when the import fails,
+    and it is a parameter rather than a generic sentence: "unavailable" without
+    a cost is a line people learn to scroll past.
+    """
     here = Path(__file__).resolve()
     for candidate in [here.parent, *here.parents]:
-        if (candidate / "scripts" / "utils" / "checkpoint_paths.py").is_file():
+        if (candidate / relpath).is_file():
             sys.path.insert(0, str(candidate))
             try:
-                from scripts.utils import checkpoint_paths
+                return importer()
             except Exception as exc:  # noqa: BLE001 - reported, never fatal
-                print(f"session-start: checkpoint_paths unavailable ({exc}); the "
-                      f"workspace-update marker is read and rewritten "
-                      f"unserialised", file=sys.stderr)
+                print(f"session-start: {label} unavailable ({exc}); "
+                      f"{consequence}", file=sys.stderr)
                 return None
-            return checkpoint_paths
-    print("session-start: no scripts/utils/checkpoint_paths.py on this clone; the "
-          "workspace-update marker is read and rewritten unserialised",
+    print(f"session-start: no {relpath} on this clone; {consequence}",
           file=sys.stderr)
     return None
 
@@ -738,6 +753,79 @@ def check_yard_bootstrap(workspace_root):
             f"registrations are missing here. " + hint)
 
 
+def check_yards_without_a_session(workspace_root):
+    """Name every worktree of this repository that holds no transcript.
+
+    The sibling above asks about THIS checkout. This one asks about the others,
+    and it is a separate question with a separate answer: a worktree can be
+    provisioned to `status: ok` and still have no agent in it.
+
+    MEASURED 2026-09-06: `herdr worktree create` opens a SHELL and has no flag
+    that starts an agent, so the agent arrives only through the bootstrap
+    plugin's last step, which is skipped in silence when no pane resolves,
+    skipped by design under `HEADING_OS_AUTOSTART=0`, short-circuited on a
+    re-open of a healthy yard, and reports success on `herdr pane run` exiting
+    zero -- which means DISPATCHED, not booted. The operator hit the result
+    twice that day: a yard that looks alive, has nothing to show, and gets a
+    neighbouring yard's session rendered into its slot.
+
+    HELM ONLY, and that is the point rather than an optimisation. This alert is
+    about the fleet, HELM is the one session the operator sits at himself, and
+    firing it in every yard would print the same list N times. `.git` being a
+    DIRECTORY is how the main clone is told apart, the same predicate the
+    sibling above uses in the other direction.
+
+    An alert, never a block, and never an action: starting an agent is a change
+    to what runs on this machine, which a hook does not get to make on its own.
+
+    Against the hook's time budget: MEASURED 2026-09-06, 3.7 ms per sweep over
+    one registered worktree, which is one `git rev-parse` plus a directory
+    listing per yard. It scales with the number of yards, not with their size.
+    """
+    try:
+        if not (workspace_root / ".git").is_dir():
+            return None                       # a YARD, or not a checkout at all
+    except OSError:
+        return None
+
+    def _import():
+        from scripts.utils import yard_sessions
+        return yard_sessions
+
+    module = _load_engine_module(
+        "scripts/utils/yard_sessions.py", "yard_sessions", _import,
+        "no worktree is checked for a transcript")
+    if module is None:
+        return ("YARD SESSION SWEEP UNAVAILABLE: scripts/utils/yard_sessions.py "
+                "could not be imported, so nothing established which worktrees "
+                "hold a transcript. Treat the sidebar as unverified.")
+
+    try:
+        # No `exclude=` here on purpose. It exists for a caller running INSIDE a
+        # yard, whose own transcript may not be on disk yet at SessionStart;
+        # this one runs in HELM, which `worktree_roots` never returns, so an
+        # exclusion of `workspace_root` could not change any answer.
+        report = module.yards_without_a_session(workspace_root)
+    except Exception as exc:  # noqa: BLE001 - an alert surface never crashes
+        return (f"YARD SESSION SWEEP FAILED ({type(exc).__name__}: {exc}). No "
+                "worktree was checked for a transcript.")
+
+    if report.unknown:
+        return f"WORKTREES NOT CHECKED FOR A TRANSCRIPT: {report.unknown}."
+    if not report.silent:
+        return None
+
+    names = [p.name for p in report.silent]
+    shown = ", ".join(names[:8])
+    if len(names) > 8:
+        shown += f", and {len(names) - 8} more"
+    return (f"{len(report.silent)} of {len(report.checked)} worktree(s) hold no "
+            f"transcript, so no agent has ever run in them: {shown}. "
+            f"`herdr worktree create` opens a shell, not an agent, and a yard "
+            f"without one shows a NEIGHBOUR's work in the sidebar. Start one: "
+            f"cd into the yard, then `HEADING_OS_YARD=1 claude`.")
+
+
 def main():
     try:
         input_data = json.loads(sys.stdin.read())
@@ -795,6 +883,10 @@ def main():
     yard_alert = check_yard_bootstrap(workspace_root)
     if yard_alert:
         alerts.append(yard_alert)
+
+    fleet_alert = check_yards_without_a_session(workspace_root)
+    if fleet_alert:
+        alerts.append(fleet_alert)
 
     # Check sync status (exec workspaces only)
     sync_alert = check_sync_status(project_dir, identity)

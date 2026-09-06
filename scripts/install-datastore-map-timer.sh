@@ -46,8 +46,13 @@ require_main_clone
 # Workspace root = directory containing this script's parent (i.e. scripts/../).
 WORKSPACE="$(cd "$(dirname "$0")/.." && pwd)"
 
-# Honor PYTHON env override so callers can point at a venv interpreter.
-PYTHON="${PYTHON:-$(command -v python3 || command -v python || true)}"
+# Interpreter for the unit's ExecStart=, resolved by the one owner:
+# explicit PYTHON wins, else the pinned .venv, else PATH. MEASURED 2026-09-06:
+# seven installed units ran on /usr/bin/python3, whose numpy and pyyaml are
+# luck rather than a contract, and everything they respawn through
+# sys.executable inherited it.
+source "$(dirname "$0")/lib/resolve-python.sh"
+PYTHON="$(resolve_python "$WORKSPACE")"
 
 # Unit timezone: resolved through the workspace resolver rather than read from
 # the environment alone. HEADING_OS_TZ lives in the gitignored .env and is

@@ -49,7 +49,7 @@ pins the resolved set.
    are not armed. It writes the gitignored `.claude/settings.local.json`, which
    registers 15 of the 17 hooks; the tracked `.claude/settings.json` registers
    the other 2. Among the 15 is `_dispatch.py`, the single entry point for
-   eleven PreToolUse walls including the release gate and the secret scanner. A
+   thirteen PreToolUse walls including the release gate and the secret scanner. A
    clone that skips this runs with those walls down and nothing says so. The 2
    tracked ones are the data-path redirect and, since 2026-09-03, the
    session-start brief: it carries the YARD-NOT-PROVISIONED warning, so leaving

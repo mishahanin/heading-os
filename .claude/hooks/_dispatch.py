@@ -2914,6 +2914,32 @@ _COMMIT_WORDS = (
     # the rest of this list: "fix the merge conflict" now authorises a commit,
     # exactly as "check the commit" already did.
     "merge", "мерж", "мёрж",
+    # The Russian half of the same word, and the next turn of the same screw.
+    # MEASURED 2026-09-06: the operator typed `сливай фикс w5M, удаляй ярд` and
+    # this wall refused the commit. `слить` is what a Russian speaker says for
+    # "merge a branch" at least as often as `смержить`, and the list above held
+    # only the borrowed spelling, so the wall heard one of the two words the
+    # operator actually uses for one action.
+    #
+    # WHY THIS IS STILL AN ENUMERATION, AND WHY THAT IS ACCEPTABLE HERE. The
+    # daemon rule's list of verbs was a defect because a verb missing from it
+    # was a REFUSAL missing: the hole was silent and permissive. This list fails
+    # the other way round. A word absent from it costs a false refusal, which
+    # the operator sees immediately and can answer by typing another word, and
+    # nothing that should have been stopped gets through. So an incomplete list
+    # here is a nuisance with a visible symptom rather than an invisible hole,
+    # which is the whole reason it is tolerable to write one down.
+    #
+    # What is enumerated is also narrower than it looks: these are the
+    # INFLECTIONS of one root, and a Russian root has a closed set of them,
+    # unlike the open set of verbs a rule about daemons has to cover. The open
+    # part is the list of ROOTS, and that stays open; the answer to a new one is
+    # to add it, the same way `merge` was added.
+    #
+    # `слив` catches `сливай` and `сливаю`; `слить` and `слей` are the other two
+    # imperatives; `сольё`/`солью` are the perfective future (`давай сольём`).
+    # Deliberately NOT a bare `сли`, which is inside `слишком`.
+    "слить", "слив", "слей", "сольё", "солью",
 )
 
 # PER ACTION, since 2026-09-03. These were one list, and any entry refused the
@@ -2939,6 +2965,10 @@ _COMMIT_NEGATIONS = (
     # and the operator writes "merge but don't commit anything else" constantly.
     "не мерж", "не мёрж", "без мержа", "без мёржа",
     "don't merge", "dont merge", "do not merge", "no merge",
+    # One negation per permission added above, written in the same change. A
+    # permission word shipped without its refusing pair means `не сливай` reads
+    # as `сливай` and authorises exactly what the sentence forbids.
+    "не слить", "не слив", "не слей", "не сольё", "не солью", "без слива",
 )
 
 # A prohibition said in words the lists above do not enumerate. MEASURED
@@ -3304,8 +3334,32 @@ def _flatten(text: str) -> str:
     return " ".join((text or "").split())
 
 
+#: Why the operator's words could not be produced. The caller turns these into
+#: DIFFERENT refusals, and that is the whole reason they exist as separate
+#: values rather than as one None.
+#:
+#: MEASURED 2026-09-06: with one message for all of them, establishing which of
+#: the two records was missing meant opening the reader, then the raw JSONL of a
+#: live transcript, by hand. The two states have nothing to do with each other.
+#: `_NO_TRANSCRIPT` and `_NO_RECORDS` are a broken or absent file, which is a
+#: machine problem. `_UNCONFIRMED` and `_MISMATCH` are the harness having written
+#: one of the turn's two prompt records and not yet the other, which is a
+#: TIMING problem the operator resolves by asking again in a fresh turn.
+_PROMPT_OK = "ok"
+_PROMPT_NO_TRANSCRIPT = "no-transcript"
+_PROMPT_NO_RECORDS = "no-records"
+_PROMPT_UNCONFIRMED = "unconfirmed"
+_PROMPT_MISMATCH = "mismatch"
+
+
 def _reconcile(typed: str | None, capped: str | None) -> str | None:
-    """The operator's words, full length, or None.
+    """The operator's words, full length, or None. See `_reconcile_detail`."""
+    return _reconcile_detail(typed, capped)[0]
+
+
+def _reconcile_detail(typed: str | None,
+                      capped: str | None) -> tuple[str | None, str]:
+    """The operator's words, full length, and why not when there are none.
 
     `capped` is the harness-written `last-prompt`, which the model cannot forge
     and which is therefore the provenance guarantee this wall rests on. `typed`
@@ -3320,17 +3374,28 @@ def _reconcile(typed: str | None, capped: str | None) -> str | None:
         # A session recorded before `promptSource` existed. The capped text is
         # all there is, and it is CUT AT 200 CHARACTERS PLUS AN ELLIPSIS, so
         # anything the operator wrote past that is invisible here.
-        return capped
+        return ((capped, _PROMPT_OK) if capped is not None
+                else (None, _PROMPT_NO_RECORDS))
     if capped is None:
-        return None                       # unconfirmed origin: refuse
+        return None, _PROMPT_UNCONFIRMED  # unconfirmed origin: refuse
     head = _flatten(capped).rstrip("…").rstrip()
     if head and _flatten(typed).startswith(head):
-        return typed
-    return None
+        return typed, _PROMPT_OK
+    return None, _PROMPT_MISMATCH
 
 
 def _last_operator_prompt(transcript_path: str) -> str | None:
     """The operator's verbatim most recent typed prompt, or None.
+
+    See `_last_operator_prompt_reason`, which this delegates to; the two exist
+    separately so a caller that only wants the words is not made to carry a
+    reason code it will not read.
+    """
+    return _last_operator_prompt_reason(transcript_path)[0]
+
+
+def _last_operator_prompt_reason(transcript_path: str) -> tuple[str | None, str]:
+    """The operator's verbatim most recent typed prompt, and why not when absent.
 
     IT USED TO RETURN A TRUNCATED COPY. `lastPrompt` is capped: MEASURED
     2026-09-03 over this session's own transcript, 166 `last-prompt` records,
@@ -3345,12 +3410,23 @@ def _last_operator_prompt(transcript_path: str) -> str | None:
     Falls back to the whole file when the tail holds neither record, which
     happens after a very long single turn. None on any failure, and the caller
     treats None as a refusal.
+
+    THE TIMING THIS REPORTS ON, measured rather than reasoned about. The two
+    records are not written together. MEASURED 2026-09-06 over 982 turns that
+    contain a tool call, across the 25 largest transcripts on this machine: in
+    515 of them (52.4%) the turn's `last-prompt` record is written AFTER the
+    first `tool_use` record of that turn. A commit issued as the first tool call
+    of a turn therefore lands, about half the time, on a transcript holding the
+    full typed record and the PREVIOUS turn's capped one, which is
+    `_PROMPT_MISMATCH`, or no capped record at all, which is `_PROMPT_UNCONFIRMED`.
+    Both refuse, and refusing is right: a forged typed record looks exactly the
+    same. What was wrong was saying it in the words used for an unreadable file.
     """
     if not transcript_path:
-        return None
+        return None, _PROMPT_NO_TRANSCRIPT
     p = Path(transcript_path)
     if not p.is_file():
-        return None
+        return None, _PROMPT_NO_TRANSCRIPT
 
     def _scan(blob: bytes, partial_first: bool) -> tuple[str | None, str | None]:
         lines = blob.splitlines()
@@ -3384,12 +3460,12 @@ def _last_operator_prompt(transcript_path: str) -> str | None:
                 fh.seek(size - window)
                 typed, capped = _scan(fh.read(), partial_first=True)
                 if typed is not None or capped is not None:
-                    return _reconcile(typed, capped)
+                    return _reconcile_detail(typed, capped)
                 fh.seek(0)
-                return _reconcile(*_scan(fh.read(), partial_first=False))
-            return _reconcile(*_scan(fh.read(), partial_first=False))
+                return _reconcile_detail(*_scan(fh.read(), partial_first=False))
+            return _reconcile_detail(*_scan(fh.read(), partial_first=False))
     except OSError:
-        return None
+        return None, _PROMPT_NO_TRANSCRIPT
 
 
 def _record_release(action: str, command: str, prompt: str) -> None:
@@ -3458,7 +3534,46 @@ def check_release_gate(payload: dict) -> dict | None:
     if action is None:
         return None
 
-    prompt = _last_operator_prompt(payload.get("transcript_path") or "")
+    prompt, why = _last_operator_prompt_reason(
+        payload.get("transcript_path") or "")
+    if prompt is None and why in (_PROMPT_UNCONFIRMED, _PROMPT_MISMATCH):
+        # A DIFFERENT refusal, because a different thing happened. The wall is
+        # unchanged: both states still refuse, and both still refuse for the
+        # same reason, which is that a typed record with nothing to confirm it
+        # is exactly what a forged one looks like. What changed on 2026-09-06 is
+        # that the two used to print the same sentence as an unreadable file,
+        # and establishing which had happened cost a yard a trip through the
+        # reader and the raw JSONL of a live transcript.
+        missing = ("no `last-prompt` record for this turn has been written yet"
+                   if why == _PROMPT_UNCONFIRMED else
+                   "the `last-prompt` record present is not a prefix of it, so "
+                   "it belongs to an earlier turn")
+        return {
+            "decision": "block",
+            "_policy_deny": True,
+            "reason": (
+                f"RELEASE GATE: the transcript's two records of the operator's "
+                f"prompt do not yet agree, so this {action} is refused.\n\n"
+                f"The full text is there and {missing}.\n\n"
+                f"This is a TIMING state, not a broken file, and it is common: "
+                f"MEASURED 2026-09-06 over 982 turns holding a tool call, the "
+                f"turn's `last-prompt` record is written after its first "
+                f"tool_use record in 515 of them. A {action} issued as the "
+                f"FIRST tool call of a turn lands in that window about half the "
+                f"time.\n\n"
+                f"It fails closed on purpose. The capped record is the one "
+                f"thing here a model cannot write, so accepting the full text "
+                f"without it would accept a forged record just as readily.\n\n"
+                f"What usually clears it: let a tool call complete, then run "
+                f"the {action} again, because the capped record most often "
+                f"lands just after the first tool RESULT. It does not always: "
+                f"MEASURED 2026-09-06 on this wall's own first refusal, two "
+                f"capped records were written after the operator's word and "
+                f"both still carried the PREVIOUS prompt. When that happens "
+                f"the remedy is a fresh turn, not another tool call. Do not "
+                f"edit the transcript, and do not work around this."
+            ),
+        }
     if prompt is None:
         return {
             "decision": "block",
@@ -4328,6 +4443,12 @@ def check_yard_write_guard(payload: dict) -> dict | None:
 # "it is still running" are different instructions and the operator gets the
 # one that applies.
 #
+# HELM IS NOT ONE OF THEM AND IS REFUSED OUTRIGHT. The three conditions ask
+# whether what is in a checkout is safe somewhere else; the main clone is the
+# somewhere else. It carries the object store every worktree points into and
+# the reflog, so its own tree being clean establishes nothing about what its
+# removal would cost. The clause is at the end of `check_yard_deletion_guard`.
+#
 # THE OWNERSHIP CLAUSE IN CONDITION 3, and it is a correction rather than a
 # refinement. The first version of this wall asked only "is anybody in it", and
 # the comment here promised that a finished yard "with nobody in it" passes in
@@ -4395,6 +4516,27 @@ def check_yard_write_guard(payload: dict) -> dict | None:
 # here -- both exemptions reach condition 3 only, conditions 1 and 2 are
 # untouched, and unfinished WORK is what those two hold -- but it is a claim
 # rather than a proof and is written as one.
+#
+# IS THERE A STURDIER SIGNAL? Asked properly on 2026-09-06 and the answer is no,
+# measured rather than assumed. Two candidates were available.
+#
+# Ancestry. Walking `ppid` from a process in a yard reaches, in order, the
+# agent's shell, the agent, the pane's shell, and then pid 5855 `herdr` -- the
+# server, whose own environment carries NO workspace id, and which is the common
+# ancestor of every pane in every workspace. So ancestry establishes "this
+# descends from herdr" and stops exactly one step short of "from WHICH
+# workspace", which is the only part in question.
+#
+# Herdr's own record. `session.json` holds, per workspace, an id, a custom name,
+# an `identity_cwd`, and per pane a `cwd` and an `agent_session` id. No pid, no
+# pty, nothing the kernel could be asked to confirm. Matching a claude session
+# id out of a process's argv would be back to a self-description, and argv is
+# already rejected here for a different reason.
+#
+# The one route to a proof therefore runs through herdr recording a pane's pid,
+# which is a change to a different program and is NOT made here. Until then this
+# stays a claim, and the reason not to pay more for it is unchanged: both
+# exemptions reach condition 3 only.
 #
 # WHAT IT DOES NOT DO. It never removes, commits, merges or kills anything. A
 # yard whose tree is clean, whose commits `main` can reach, and in which nothing
@@ -4645,6 +4787,27 @@ def _yard_guarded_checkouts() -> list[Path]:
                        for temp in _YARD_DELETION_TEMP_ROOTS)]
 
 
+def _yard_main_clone() -> Path | None:
+    """HELM's own path, when a deletion has to be judged against it too.
+
+    `worktree_roots` drops the main clone by construction: it is the clone the
+    registry belongs to, not a worktree of it. Correct for every other caller
+    and a hole here, because `rm -rf <HELM>` is a command the deletion guard
+    watched pass in silence.
+
+    Derived from `main_clone_path`, which asks git for `--git-common-dir` and so
+    answers the same from HELM, from a YARD and from any subdirectory of either.
+    The temp-tree exemption is the same one the yards get, and for the same
+    reason: the suite builds real main clones under `tmp_path`, and a guard that
+    fights its own suite is a guard somebody switches off.
+    """
+    from scripts.utils.clone_guard import main_clone_path
+    root = main_clone_path(WORKSPACE)
+    if any(_yard_is_under(root, temp) for temp in _YARD_DELETION_TEMP_ROOTS):
+        return None
+    return root
+
+
 def _yard_git_answer(root: Path, args: list[str]) -> tuple[bool, str]:
     """Run one read-only git command in `root`. (ok, output-or-error)."""
     import subprocess
@@ -4872,6 +5035,7 @@ def check_yard_deletion_guard(payload: dict) -> dict | None:
 
     try:
         guarded = _yard_guarded_checkouts()
+        helm = _yard_main_clone()
     except Exception as exc:  # noqa: BLE001 - resolving is what this rests on
         return _yard_deny(
             f"YARD deletion guard: this command removes a checkout, and the "
@@ -4909,6 +5073,51 @@ def check_yard_deletion_guard(payload: dict) -> dict | None:
                     f"finished:\n\n  {root}{aimed}\n\n"
                     f"What is unfinished:\n{reasons}\n\n"
                     f"What to do:\n{_yard_deletion_remedies(unmet, form, root, closes)}"
+                )
+
+    # HELM, and it is asked LAST so that a command sweeping the directory the
+    # yards live in is still answered by the yard it would erase, naming the
+    # work that is actually at risk.
+    #
+    # A WIDENING BEYOND THE ORIGINAL INSTRUCTION, which was about yards. It is
+    # here because the set the loop above walks comes from `worktree_roots`,
+    # which drops the main clone, so a command spelling HELM's own path passed
+    # in silence while the same command against any yard was refused.
+    #
+    # UNCONDITIONAL, and deliberately not the three yard conditions. Those ask
+    # "is what is in here safe somewhere else", and for HELM the answer is
+    # structurally no whatever its tree says: it holds the only object store,
+    # so every yard's `.git` file points into it and all of them die with it,
+    # and it holds the reflog, which is the only record of what was thrown away.
+    # A clean working tree says nothing about any of that. Condition 3 would
+    # have been the third instance of one shape as well, the other way up: the
+    # operator's own session stands in HELM, so it would fire always, and a
+    # condition that is always true teaches nothing.
+    #
+    # There is no legitimate step that deletes HELM. It is not part of the
+    # cycle, nothing produces it as an ending, and the operator's own terminal
+    # is not covered by this hook at all -- so the honest cost of refusing here
+    # is that the agent cannot do it, which is the whole point.
+    if helm is not None:
+        for form, targets, _closes in requests:
+            for target in targets:
+                if helm != target and not _yard_is_under(helm, target):
+                    continue
+                aimed = ("" if helm == target
+                         else f"\nAimed at {target}, which contains it.")
+                return _yard_deny(
+                    f"YARD deletion guard — intentional policy block, not an "
+                    f"error. This `{form}` would erase the MAIN CLONE:\n\n"
+                    f"  {helm}{aimed}\n\n"
+                    f"Unlike a yard, this is refused whatever state it is in. "
+                    f"It holds the one object store every worktree of this "
+                    f"repository points into, so removing it takes every yard "
+                    f"with it, and it holds the reflog, which is the only "
+                    f"record of what a mistake threw away. A clean working "
+                    f"tree does not make any of that recoverable.\n\n"
+                    f"Nothing in the documented cycle deletes it. If it really "
+                    f"has to go, that is the operator's own keyboard, not an "
+                    f"agent's tool call."
                 )
     return None
 

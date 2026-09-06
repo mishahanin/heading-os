@@ -599,7 +599,7 @@ version of the guard; if it passes there too, it proves nothing.</p>
 <h3 id="what-a-fresh-worktree-does-not-have">What a fresh worktree does NOT have</h3>
 <p>MEASURED 2026-09-03, and each of these looks healthy:</p>
 <ul>
-<li><code>.claude/settings.local.json</code> — absent, so eleven PreToolUse walls including
+<li><code>.claude/settings.local.json</code> — absent, so thirteen PreToolUse walls including
   the release gate and the secret scanner are unregistered.</li>
 <li><code>.env</code> — absent, so <code>get_data_root()</code> falls through to the bundled <code>examples</code>
   tree. Every guard gated on &ldquo;the data root differs from the workspace root&rdquo;

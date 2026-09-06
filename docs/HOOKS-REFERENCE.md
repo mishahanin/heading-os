@@ -44,12 +44,14 @@ The `CHECKS` registry in `.claude/hooks/_dispatch.py` holds eleven entries, and 
 | 3 | `check_protect_personal_threads` | always | A read of the CEO-only thread subtree, live or archived under a closed year. For `Grep` and `Glob` it also refuses an expression that can EXPAND into either. Name a business subtree instead. |
 | 4 | `check_protect_corporate` | always | A write to read-only corporate content. |
 | 5 | `check_protect_docs` | always | A direct edit to a `docs/` page that `sync-docs.py` overwrites from its template. |
-| 6 | `check_cwd_anchor` | always | A workspace script started by a root-relative path from a drifted shell directory. It fires only when the path resolves from the root and not from that directory, and it answers with the anchored command. |
-| 7 | `check_slow_shell` | always | A `Bash` call that runs the whole test suite in one process, or that waits in the foreground. It points at `scripts/run-tests.py` or at `run_in_background`. |
-| 8 | `check_rate_limit` | at the hard cap | A daily `Write` and `Edit` cap. The soft cap warns. Loop detection (same tool, same file, short window) stays advisory and never blocks. `Bash` is excluded. |
-| 9 | `check_graph_first` | always | The session's first lookup into source code, until a CodeGraph query is attempted. Any attempt unlocks the session, including one that errors or returns nothing. |
-| 10 | `check_fanout_first` | always | More hand-reading past the distinct-file budget, when the session has dispatched no agent and no workflow. `scripts/fanout-note.py` records a reason and resets the budget. |
-| 11 | `check_tool_budget` | at the hard cap | A total-tool-call cap in a 30-minute rolling window. It counts only the calls these five matchers deliver, so a loop built out of other tools stays invisible here. |
+| 6 | `check_yard_write_guard` | in a YARD | A command reaching OUT of the task's own worktree: into HELM, into a neighbouring yard, into a shared git ref, or a `git` operation in the data overlay. Silent in HELM. |
+| 7 | `check_yard_deletion_guard` | always | A command that would erase a checkout holding work that exists nowhere else: a yard with uncommitted changes, with commits `main` cannot reach, or with a live process standing in it that the command would not close. The MAIN CLONE is refused unconditionally, whatever its state, because it holds the object store every worktree points into and the reflog. |
+| 8 | `check_cwd_anchor` | always | A workspace script started by a root-relative path from a drifted shell directory. It fires only when the path resolves from the root and not from that directory, and it answers with the anchored command. |
+| 9 | `check_slow_shell` | always | A `Bash` call that runs the whole test suite in one process, or that waits in the foreground. It points at `scripts/run-tests.py` or at `run_in_background`. |
+| 10 | `check_rate_limit` | at the hard cap | A daily `Write` and `Edit` cap. The soft cap warns. Loop detection (same tool, same file, short window) stays advisory and never blocks. `Bash` is excluded. |
+| 11 | `check_graph_first` | always | The session's first lookup into source code, until a CodeGraph query is attempted. Any attempt unlocks the session, including one that errors or returns nothing. |
+| 12 | `check_fanout_first` | always | More hand-reading past the distinct-file budget, when the session has dispatched no agent and no workflow. `scripts/fanout-note.py` records a reason and resets the budget. |
+| 13 | `check_tool_budget` | at the hard cap | A total-tool-call cap in a 30-minute rolling window. It counts only the calls these five matchers deliver, so a loop built out of other tools stays invisible here. |
 
 ### The release gate
 
@@ -65,7 +67,7 @@ The check then reads the most recent typed prompt from the session transcript. I
 
 **A marked brief never authorises.** The gate refuses a prompt carrying the line `X-HEADING-BRIEF: machine-to-machine, not an operator authorisation`, before it reads a single word. `scripts/herdr-brief.py` prepends that line to every brief HELM sends into a YARD. The gate matches it as a substring, so a quoted, indented or re-wrapped brief stays inert.
 
-**The gate fails closed.** It refuses the release when it cannot read the transcript. A gate that opens when it cannot see is not a gate.
+**The gate fails closed.** It refuses the release when it cannot read the transcript. A gate that opens when it cannot see is not a gate. It says WHICH read failed, because two unrelated states reach that refusal. An absent or unreadable transcript is one. The other is a timing state. The harness writes the full typed record and the capped one separately. MEASURED 2026-09-06 over 982 turns holding a tool call: the capped record lands after the turn's first `tool_use` record in 515 of them. So a commit issued as a turn's first tool call meets a half-written pair about half the time. The refusal names that, instead of blaming a file it could not read.
 
 **Its coverage, stated exactly.** The gate sees `Bash` tool calls in a session that wires `_dispatch.py` on the `Bash` matcher. It does not see a commit or a push the operator types in their own terminal, and no claim here says otherwise. It is also not the push-time secret scan, which is separate code inside `scripts/push-all.py`. Read the [security model](SECURITY-MODEL.html) for how the two compose.
 

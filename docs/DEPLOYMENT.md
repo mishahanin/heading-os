@@ -293,7 +293,7 @@ bash scripts/setup-platform.sh   # session hooks (once per fresh clone)
 > **The session hooks are local and per-clone too.** `setup-platform.sh` writes
 > `.claude/settings.local.json`, which `.gitignore` excludes. That file registers
 > 15 of the 17 session hooks, `_dispatch.py` among them. `_dispatch.py` is the
-> single entry point for eleven PreToolUse walls, including the release gate.
+> single entry point for thirteen PreToolUse walls, including the release gate.
 > A clone that skips this step arms 2 hooks of 17, from the tracked
 > `.claude/settings.json`, and nothing else reports the other 15 as absent.
 > Verify with `bash scripts/setup-platform.sh --check`, which exits non-zero and

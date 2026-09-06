@@ -186,36 +186,48 @@
 </tr>
 <tr>
 <td>6</td>
+<td><code>check_yard_write_guard</code></td>
+<td>in a YARD</td>
+<td>A command reaching OUT of the task&rsquo;s own worktree: into HELM, into a neighbouring yard, into a shared git ref, or a <code>git</code> operation in the data overlay. Silent in HELM.</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>check_yard_deletion_guard</code></td>
+<td>always</td>
+<td>A command that would erase a checkout holding work that exists nowhere else: a yard with uncommitted changes, with commits <code>main</code> cannot reach, or with a live process standing in it that the command would not close. The MAIN CLONE is refused unconditionally, whatever its state, because it holds the object store every worktree points into and the reflog.</td>
+</tr>
+<tr>
+<td>8</td>
 <td><code>check_cwd_anchor</code></td>
 <td>always</td>
 <td>A workspace script started by a root-relative path from a drifted shell directory. It fires only when the path resolves from the root and not from that directory, and it answers with the anchored command.</td>
 </tr>
 <tr>
-<td>7</td>
+<td>9</td>
 <td><code>check_slow_shell</code></td>
 <td>always</td>
 <td>A <code>Bash</code> call that runs the whole test suite in one process, or that waits in the foreground. It points at <code>scripts/run-tests.py</code> or at <code>run_in_background</code>.</td>
 </tr>
 <tr>
-<td>8</td>
+<td>10</td>
 <td><code>check_rate_limit</code></td>
 <td>at the hard cap</td>
 <td>A daily <code>Write</code> and <code>Edit</code> cap. The soft cap warns. Loop detection (same tool, same file, short window) stays advisory and never blocks. <code>Bash</code> is excluded.</td>
 </tr>
 <tr>
-<td>9</td>
+<td>11</td>
 <td><code>check_graph_first</code></td>
 <td>always</td>
 <td>The session&rsquo;s first lookup into source code, until a CodeGraph query is attempted. Any attempt unlocks the session, including one that errors or returns nothing.</td>
 </tr>
 <tr>
-<td>10</td>
+<td>12</td>
 <td><code>check_fanout_first</code></td>
 <td>always</td>
 <td>More hand-reading past the distinct-file budget, when the session has dispatched no agent and no workflow. <code>scripts/fanout-note.py</code> records a reason and resets the budget.</td>
 </tr>
 <tr>
-<td>11</td>
+<td>13</td>
 <td><code>check_tool_budget</code></td>
 <td>at the hard cap</td>
 <td>A total-tool-call cap in a 30-minute rolling window. It counts only the calls these five matchers deliver, so a loop built out of other tools stays invisible here.</td>
@@ -232,7 +244,7 @@
 </ul>
 <p>The check then reads the most recent typed prompt from the session transcript. It reads two records. The harness-written <code>last-prompt</code> holds at most 200 characters, and the same turn&rsquo;s <code>promptSource: "typed"</code> record holds the full text. The capped record confirms the full one by prefix. <code>prompt_authorises()</code> accepts the action when that prompt carries an authorising word in English or Russian. It refuses when the prompt carries a negation anywhere. The check appends each authorised release to a log the operator can audit.</p>
 <p><strong>A marked brief never authorises.</strong> The gate refuses a prompt carrying the line <code>X-HEADING-BRIEF: machine-to-machine, not an operator authorisation</code>, before it reads a single word. <code>scripts/herdr-brief.py</code> prepends that line to every brief HELM sends into a YARD. The gate matches it as a substring, so a quoted, indented or re-wrapped brief stays inert.</p>
-<p><strong>The gate fails closed.</strong> It refuses the release when it cannot read the transcript. A gate that opens when it cannot see is not a gate.</p>
+<p><strong>The gate fails closed.</strong> It refuses the release when it cannot read the transcript. A gate that opens when it cannot see is not a gate. It says WHICH read failed, because two unrelated states reach that refusal. An absent or unreadable transcript is one. The other is a timing state. The harness writes the full typed record and the capped one separately. MEASURED 2026-09-06 over 982 turns holding a tool call: the capped record lands after the turn&rsquo;s first <code>tool_use</code> record in 515 of them. So a commit issued as a turn&rsquo;s first tool call meets a half-written pair about half the time. The refusal names that, instead of blaming a file it could not read.</p>
 <p><strong>Its coverage, stated exactly.</strong> The gate sees <code>Bash</code> tool calls in a session that wires <code>_dispatch.py</code> on the <code>Bash</code> matcher. It does not see a commit or a push the operator types in their own terminal, and no claim here says otherwise. It is also not the push-time secret scan, which is separate code inside <code>scripts/push-all.py</code>. Read the <a href="SECURITY-MODEL.html">security model</a> for how the two compose.</p>
 <p><strong>What the marker does not establish.</strong> An UNMARKED prompt is not thereby established as the operator&rsquo;s typing. MEASURED 2026-09-05, the harness writes identical fields for both kinds: a prompt one Claude session delivered, and a prompt the operator typed by hand. No field says who produced the text. So the marker is fail-open by construction, and the only thing behind that is the sender. A brief sent by hand with a bare <code>herdr agent prompt</code> authorises exactly as it did before.</p>
 <h2 id="posttooluse-observe-and-correct">PostToolUse (observe and correct)</h2>

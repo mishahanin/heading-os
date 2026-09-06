@@ -31,6 +31,27 @@ WHAT IT DOES NOT ESTABLISH, stated here rather than left to be discovered:
     and is SKIPPED, so a directory held open only by another user's process
     reads as empty. The kernel offers nothing else; there is no widening
     available.
+
+    MEASURED 2026-09-06 on this machine, 73 processes: 37 answered the readlink
+    and 36 raised `EACCES`, 29 of those owned by root. The skip was reviewed
+    that day and DELIBERATELY LEFT AS IT IS, because the obvious improvement
+    does not survive being written down. Counting the skipped ones and saying
+    "36 could not be inspected" would attach a machine-wide number to a
+    question about ONE directory: `EACCES` on the readlink means the cwd is
+    unknown, so none of the 36 can be placed inside or outside the tree being
+    asked about. A caller printing that count next to a yard's name states an
+    unknown as if it were a suspicion, which is worse than the silence it
+    replaces. Reporting it only when a caller already refuses would be honest
+    and useless -- the caller is refusing for a reason it can name -- and there
+    is nowhere else to put it, because a caller that PASSES prints nothing by
+    design.
+
+    So the honest statement is this paragraph rather than a number in a
+    refusal: this sweep sees the processes of the user running it. On a
+    single-user machine the set it cannot see is the system's own daemons,
+    which do not stand in a checkout; on a shared one, another user's shell
+    sitting in a yard is invisible here and no amount of care in this module
+    changes that.
   * `comm` is the kernel's 15-character task name, so a match on it is a match
     on what the binary was called, never on who wrote it or what it is doing.
   * A process can exit between the readlink and the caller acting on the answer.

@@ -492,7 +492,7 @@ version of the guard; if it passes there too, it proves nothing.
 
 MEASURED 2026-09-03, and each of these looks healthy:
 
-- `.claude/settings.local.json` — absent, so eleven PreToolUse walls including
+- `.claude/settings.local.json` — absent, so thirteen PreToolUse walls including
   the release gate and the secret scanner are unregistered.
 - `.env` — absent, so `get_data_root()` falls through to the bundled `examples`
   tree. Every guard gated on "the data root differs from the workspace root"

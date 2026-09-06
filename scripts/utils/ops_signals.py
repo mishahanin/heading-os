@@ -724,29 +724,17 @@ def ollama_accel_state(engine_root: Path, timeout: int = 3) -> dict:
     `census-submodel-bench.py`) resolves `generate:` from the same machine file
     and may point elsewhere; this signal says nothing about it.
     """
-    import yaml
+    from scripts.utils.embeddings import index_embed_preference
+    from scripts.utils.ollama_host import LOCAL_HOST, host_candidates, probe
 
-    from scripts.utils import yamlio
-    from scripts.utils.ollama_host import (
-        LOCAL_HOST,
-        host_candidates,
-        machine_hosts,
-        probe,
-    )
-
-    cfg: dict = {}
-    config_path = engine_root / "config" / "memory-index.yaml"
-    try:
-        with open(config_path, encoding="utf-8") as fh:
-            cfg = yamlio.safe_load(fh) or {}
-    except (OSError, yaml.YAMLError):
-        cfg = {}
-
-    preference = (
-        cfg.get("host")
-        or os.environ.get("HEADING_OS_OLLAMA_EMBED_HOST", "")
-        or machine_hosts("embed", root=engine_root)
-    )
+    # Asked of the index's own resolver rather than restated here. The three
+    # sources and their order used to be spelled out a second time in this
+    # function, and a second copy is the one that stops being fixed: on
+    # 2026-09-06 the resolver learned to read a linked worktree's main checkout
+    # and this monitor would not have, so it would have reported "not
+    # configured" for every yard on a machine that is pinned - the precise
+    # blindness the paragraph above says this must not have.
+    preference = index_embed_preference(root=engine_root)
 
     # `host_candidates`, not `candidate_url`: since 2026-08-23 the pin may name
     # several ports on the same machine, and reading only the first entry would

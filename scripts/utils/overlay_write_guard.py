@@ -125,6 +125,12 @@ _CHILD_SPAWNS_BY_TEST: dict[str, list] = {}
 _CHILD_SPAWN_BY_TEST_CAP = 2000
 _CHILD_SPAWN_UNATTRIBUTED = 0
 
+# The key a spawn gets when `PYTEST_CURRENT_TEST` is unset: session-level and
+# import-time spawns, and every spawn the xdist CONTROLLER makes. A named
+# constant because two files now compare against it, and a second spelling of a
+# sentinel is a sentinel that stops matching.
+UNKNOWN_TEST = "<unknown test>"
+
 # Wall-clock moment `_WATCH_BEFORE` was taken. Recorded because the overlay is a
 # LIVE tree: a concurrent agent, a daemon or the operator can create a file in it
 # while the suite runs, and a reader comparing the snapshot against a later walk
@@ -915,7 +921,7 @@ def _install_overlay_write_guard():
             _CHILD_SPAWN_COUNT += 1
             head = " ".join(str(a) for a in cmd)[:120] if isinstance(cmd, (list, tuple)) \
                 else str(cmd)[:120]
-            nodeid = os.environ.get("PYTEST_CURRENT_TEST", "<unknown test>").split(" (")[0]
+            nodeid = os.environ.get("PYTEST_CURRENT_TEST", UNKNOWN_TEST).split(" (")[0]
             # Attribution BEFORE the example cap, and that ordering is the fix.
             # `_CHILD_SPAWNS` fills at 200 and then records nothing, so under
             # `-n auto` the report described the first 200 spawns of the
@@ -1170,6 +1176,30 @@ def top_spawners(limit=10, source=None):
         source = _CHILD_SPAWNS_BY_TEST
     ranked = sorted(source.items(), key=lambda kv: (-kv[1][0], kv[0]))
     return [(nodeid, entry[1], entry[0]) for nodeid, entry in ranked[:limit]]
+
+
+def spawner_digests(source=None) -> set:
+    """One short digest per DISTINCT spawning nodeid in this process.
+
+    A set of digests rather than a count, and that is the whole point. Counts
+    from several processes can only be ADDED, and addition assumes no nodeid is
+    seen twice: true for real nodeids under xdist's default `load` scheduling,
+    false for `--dist each`, and false for `UNKNOWN_TEST`, which every worker
+    produces for its own session-level spawns. A union has no such assumption
+    and needs no wire budget to speak of: 8 bytes per distinct test against the
+    ~80 a nodeid costs, so the whole map fits inside the slice budget the
+    attribution rows already spend.
+
+    blake2b truncated to 8 bytes. At the cap of 2000 distinct tests per process
+    the chance of one collision across the whole run is about 1e-13, which is
+    below the rate at which the count changes for real reasons.
+    """
+    import hashlib
+    if source is None:
+        source = _CHILD_SPAWNS_BY_TEST
+    return {hashlib.blake2b(nodeid.encode("utf-8", "replace"),
+                            digest_size=8).hexdigest()
+            for nodeid in source}
 
 
 def merge_spawn_attribution(entries, unattributed=0, into=None):

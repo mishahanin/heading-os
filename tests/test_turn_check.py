@@ -453,7 +453,7 @@ def test_a_fast_one():
 '''
 
 
-def test_the_test_lane_deselects_slow_marked_tests():
+def test_the_test_lane_deselects_slow_marked_tests(tmp_path, monkeypatch):
     """A sleep-based test is worth running once per push, not once per turn.
 
     Measured 2026-08-22: editing `.claude/hooks/checkpoint-offer.py` matched a
@@ -461,28 +461,41 @@ def test_the_test_lane_deselects_slow_marked_tests():
     for about a minute after every answer and the operator felt the whole harness
     as slow. `scripts/run-tests.py` still runs them; this lane does not.
     """
-    # This file has to live in the REAL tests directory: `matching_tests` only
-    # picks up a changed test file whose path is under `tests/`, so a tmp_path
-    # fixture would exercise nothing. The cost is that the tests tree is briefly
-    # mutated while other xdist workers walk it — that raced
-    # `tests/test_venv_relaunch_guard.py` twice on 2026-08-22 with a
-    # FileNotFoundError, and it took a full traceback on 2026-08-23 to see why.
-    # Any new test that scans `tests/` must tolerate a path vanishing between
-    # rglob and read; that guard shows the shape.
+    # THE FIXTURE IS NOT WRITTEN INTO THE LIVE TESTS DIRECTORY, and that took
+    # three races to arrive at. Until 2026-09-06 this wrote a real
+    # `tests/test_turn_check_slow_fixture.py` and unlinked it in a `finally`,
+    # on the reasoning that `matching_tests` only picks up a changed test whose
+    # path is under `tests/`. What it needs is the RELATIVE path, measured
+    # against the module global `tc.ROOT`; moving that global moves the
+    # requirement with it, which is what the sibling module
+    # `tests/test_an_empty_test_file_that_a_deselection_hid.py` already did for
+    # its own two fixtures on 2026-08-30, for this same reason.
     #
-    # `missing_ok=True`: cleanup must never be the thing that fails this test.
-    # On 2026-08-23 `tests/test_venv_relaunch_guard.py` wrote and deleted this
-    # exact path as its own probe, and when the two landed on different xdist
-    # workers at the same moment this `unlink` raised FileNotFoundError. That
-    # test now owns a distinct name, and asserts no one else uses it; this stays
-    # as the second line of defence.
-    fixture = ROOT / "tests" / "test_turn_check_slow_fixture.py"
+    # What the live file cost, each one a full-suite failure with nothing wrong
+    # in the code under test: FileNotFoundError out of the repository-wide walk
+    # in `tests/test_venv_relaunch_guard.py`, twice (2026-08-22, 2026-08-23),
+    # and MEASURED 2026-09-06 in HELM, one full `-n auto` run in three,
+    # `ERROR tests/test_turn_check_slow_fixture.py` -- an ImportError with no
+    # text, because a COLLECTOR resolved the path and this unlink landed before
+    # the import. The first two were paid for by adding tolerance to the
+    # scanners in this repository; the third cannot be, because pytest's
+    # collector is not ours to teach.
+    #
+    # A file that never enters the tree closes all three, and needs no
+    # tolerance anywhere. MEASURED 2026-09-06: `ran == 1` and `deselected == 1`
+    # are unchanged under `tmp_path`.
+    monkeypatch.setattr(tc, "ROOT", tmp_path)
+    (tmp_path / "tests").mkdir()
+    fixture = tmp_path / "tests" / "test_turn_check_slow_fixture.py"
     fixture.write_text(SLOW_FIXTURE, encoding="utf-8")
-    try:
-        failures, ran, skipped, deselected, _empty, _un = tc.lane_tests(
-            [fixture], timeout=60)
-    finally:
-        fixture.unlink(missing_ok=True)
+    # The claim the old comment made about `matching_tests` was never asserted,
+    # so nothing would have noticed the day it stopped being true. It is the
+    # reason the fixture sits under a `tests/` directory at all.
+    assert tc.matching_tests([fixture]) == [fixture], (
+        "the lane did not pick the fixture, so the counts below would be "
+        "about some other file")
+    failures, ran, skipped, deselected, _empty, _un = tc.lane_tests(
+        [fixture], timeout=60)
     assert failures == [], failures
     assert ran == 1, "the fixture file was not handed to pytest"
     assert deselected == 1, "the slow-marked test was not deselected"

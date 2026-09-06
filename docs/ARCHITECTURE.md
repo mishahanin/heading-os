@@ -262,9 +262,9 @@ was clean; the command that was typed would not have known the difference.
 worktree of this repository that is not finished. Finished means all three of:
 a clean working tree (`git status --porcelain` in THAT tree), no commit on its
 HEAD that `main` cannot reach (`rev-list --count main..HEAD`, which answers for
-a detached HEAD too), and nothing standing in it that the command would not
-close (`/proc/<pid>/cwd`, 0.8 ms over 76 processes). It recognises forms rather
-than one string:
+a detached HEAD too), and no LIVE process standing in it that the command would
+not close (`/proc/<pid>/cwd`, 0.8 ms over 76 processes). It recognises forms
+rather than one string:
 `git worktree remove` with and without `--force`, `rm -r` and `rm -rf` by any
 spelling including a directory that merely contains yards, and
 `herdr worktree remove --workspace <ID>`, whose path is resolved from herdr's
@@ -272,26 +272,49 @@ own session record before the command is judged. Every unmet condition is named,
 because "commit it", "merge it" and "use the spelling that closes the session"
 are three different instructions.
 
-The third condition carries an ownership clause, and it is a correction rather
-than a nicety. Asked as "is anybody in it", the wall refused the last step of
-the cycle always: MEASURED 2026-09-06 against the live yard `w5M`, seven
-processes stood in it, the agent plus three MCP servers, the pane's shell and
-two children, and that is a yard's normal state at the moment its work is done.
-So the question is what the COMMAND does. `herdr worktree remove --workspace
-<ID>` closes that workspace's session as part of the removal, so a process
-belonging to `<ID>` is part of the operation; `rm -rf` and `git worktree remove`
-close nothing and leave every process inside with a deleted working directory,
-so for them the condition is unchanged. Ownership is read from
-`HERDR_WORKSPACE_ID`, which herdr exports into the pane and every descendant
-inherits: all seven processes carried it, every environment was readable, and a
-process started with the variable stripped read back as absent. A process whose
-environment cannot be read, or which carries a different workspace or none, is
-foreign and still refuses. The clause reaches condition 3 only, so `--force`
-over uncommitted work, the incident that prompted the wall, is untouched.
+The third condition took two corrections on 2026-09-06, and they are the same
+correction twice: an exemption whose condition never arrives in practice, so the
+wall refuses the last step of the cycle always.
 
-Where a refusal is caused by the yard's own session alone, it names the herdr
-spelling with the workspace id in it, because at that point the operator is
-holding the wrong command rather than unfinished work.
+**Ownership.** Asked as "is anybody in it", the wall refused every removal:
+MEASURED against the live yard `w5M`, seven processes stood in it, the agent
+plus three MCP servers, the pane's shell and two children, and that is a yard's
+normal state at the moment its work is done. So the question is what the COMMAND
+does. `herdr worktree remove --workspace <ID>` closes that workspace's session as
+part of the removal, so a process belonging to `<ID>` is part of the operation;
+`rm -rf` and `git worktree remove` close nothing and leave every process inside
+with a deleted working directory, so for them nothing is exempt on this ground.
+
+**Orphans.** With ownership in place the wall still refused, on the first real
+deletion after the merge. MEASURED that day in HELM: fourteen processes stood in
+the yard, five its own and NINE naming `w4G`, a yard deleted weeks earlier and
+absent from both `herdr workspace list` and `session.json`. They are Claude
+Code's warmed background workers and the MCP servers they spawn, whose cwd
+drifts into live yards, and their number only grows. The decisive evidence runs
+against the condition for that class: `w4G`'s own checkout was deleted under
+those very processes and nothing broke. So a process naming a workspace herdr no
+longer records is an orphan and is dropped for EVERY form, because the argument
+is about the process rather than about what the command closes. A process naming
+a LIVE workspace other than the one being closed still refuses, and so does one
+naming none. When herdr's record cannot be read, orphan cannot be told from
+neighbour, so nothing is dropped and the refusal says so.
+
+Both clauses read `HERDR_WORKSPACE_ID`, which herdr exports into the pane and
+every descendant inherits: all seven of `w5M`'s processes carried it, every
+environment was readable, and a process started with the variable stripped read
+back as absent. Neither clause reaches conditions 1 or 2, so `--force` over
+uncommitted work, the incident that prompted the wall, is untouched. Telling a
+warmed worker by `bg-spare` in its argv was rejected deliberately: that is a list
+of the process shapes seen this week, the same mistake as writing a rule as a
+list of verbs.
+
+The refusal names one remedy per unmet condition and none for a condition that
+holds. The paragraph it replaced printed all of them, so the first live refusal
+ended "commit the work and have HELM merge the branch" against a yard whose work
+was committed and whose branch was merged. Where the only thing standing in a
+yard is its own session, the refusal carries the herdr spelling with the
+workspace id in it, because at that point the operator is holding the wrong
+command rather than unfinished work.
 
 Two bounds are stated rather than left to be found. A PreToolUse hook sees tool
 calls, so this closes what the AGENT can do and closes nothing inside a process

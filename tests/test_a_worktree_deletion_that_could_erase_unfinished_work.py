@@ -25,13 +25,14 @@ different instructions:
 
     1. the working tree is clean
     2. HEAD holds no commit `main` cannot reach
-    3. nothing has its cwd inside it that THIS COMMAND would not close
+    3. no LIVE process has its cwd inside it that THIS COMMAND would not close
 
-Condition 3 carried no ownership clause until 2026-09-06, and the wall it
-produced refused the last step of the documented cycle always: measured against
-the live yard `w5M`, seven processes stood in a yard whose work was finished,
-which is that yard's normal state. The clause and its measurements are in the
-section that drives it, below.
+Condition 3 took two corrections on 2026-09-06, both of the same shape: an
+exemption whose condition never arrives, so the wall refuses the last step of
+the documented cycle always. Asked as "is anybody in it", seven processes stood
+in a finished yard. Asked as "is anybody in it that this command would not
+close", nine MORE stood in it naming a yard deleted weeks earlier. Each clause
+and its measurements are in the section that drives it, below.
 
 Every refusal here is paired with the case that must still pass. The pairs
 matter more than the refusals: a guard that refuses every deletion makes the
@@ -396,9 +397,19 @@ def test_a_working_tree_that_cannot_be_read_is_unknown_not_clean(bench, tmp_path
 # ============================================================
 
 def test_a_yard_with_a_process_in_it_is_refused(bench, finished):
-    """Clean and merged, so only the third condition can refuse this."""
+    """Clean and merged, so only the third condition can refuse this.
+
+    The workspace variable is stripped from the child on purpose. This suite
+    runs both inside a yard, where the runner carries one, and in HELM, where it
+    does not; inheriting it would make the case turn on whether that workspace
+    happens to be live in the operator's herdr record. A process naming no
+    workspace is the plainest form of "somebody is in here" and is what this
+    case is about.
+    """
+    env = _env(bench.scratch)
+    env.pop("HERDR_WORKSPACE_ID", None)
     held = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
-                            cwd=str(finished), env=_env(bench.scratch))
+                            cwd=str(finished), env=env)
     try:
         # The cwd link exists as soon as the child does; give the fork a moment
         # so this asserts about a running process rather than about a race.
@@ -438,7 +449,9 @@ def test_an_unreadable_proc_is_unknown_not_nobody(bench, finished, monkeypatch):
 
     monkeypatch.setattr(proc_cwd, "processes_in", lambda *a, **k: None)
     unmet = module._yard_unfinished(finished)
-    assert any("UNKNOWN" in reason and "/proc" in reason for reason in unmet), (
+    assert all(kind for kind, _ in unmet), "every reason carries its kind"
+    assert any("UNKNOWN" in text and "/proc" in text
+               for _, text in unmet), (
         f"an unreadable /proc was read as an empty machine: {unmet}")
 
 
@@ -525,7 +538,10 @@ def test_a_process_from_another_workspace_still_refuses(
     exists for.
     """
     standing(finished, "wSOMEONE-ELSE")
-    socket = _herdr_session(tmp_path, "wTEST", finished)
+    # `also_live`, or the neighbour is an ORPHAN and gets dropped for a
+    # different reason entirely, turning this case into its opposite.
+    socket = _herdr_session(tmp_path, "wTEST", finished,
+                            also_live=("wSOMEONE-ELSE",))
     decision = _run(bench, bench.helm,
                     "herdr worktree remove --workspace wTEST",
                     HERDR_SOCKET_PATH=str(socket))
@@ -548,14 +564,21 @@ def test_a_process_that_claims_no_workspace_still_refuses(
 
 @pytest.mark.parametrize("form", ["rm -rf {path}", "git worktree remove {path}"])
 def test_a_form_that_closes_nothing_keeps_the_whole_condition(
-        bench, finished, standing, form):
+        bench, finished, standing, tmp_path, form):
     """The paired direction, and the narrowness of the exemption.
 
     Same yard, same owned process, a command that shuts nothing down. Every one
     of those processes would be left with a deleted working directory.
+
+    The session file is supplied even though no herdr command is run here: it is
+    what makes `wTEST` a LIVE workspace. Without it the guard reads the
+    operator's real record, `wTEST` is in nobody's, and the process is dropped
+    as an orphan, so the case would pass while asserting nothing.
     """
     process = standing(finished, "wTEST")
-    decision = _run(bench, bench.helm, form.format(path=finished))
+    socket = _herdr_session(tmp_path, "wTEST", finished)
+    decision = _run(bench, bench.helm, form.format(path=finished),
+                    HERDR_SOCKET_PATH=str(socket))
     assert _denied_by_this_wall(decision), _reason(decision) or "permitted"
     assert str(process.pid) in _reason(decision)
     assert "standing in it that this command would not close" not in _reason(decision), (
@@ -564,6 +587,117 @@ def test_a_form_that_closes_nothing_keeps_the_whole_condition(
         "on the phrase alone: the closing paragraph repeats those words in the "
         "general statement of what finished means, and a looser match reads "
         "that as the qualifier.")
+
+
+# ============================================================
+# Orphans: a process whose workspace no longer exists
+# ============================================================
+#
+# The ownership clause fixed the first refusal and still refused every removal,
+# for a reason nobody had looked for. MEASURED 2026-09-06 in HELM, on the first
+# real deletion after the merge: fourteen processes stood in this yard, five its
+# own and NINE naming `w4G`, a yard deleted long ago and absent from both
+# `herdr workspace list` and `session.json`. Claude Code's warmed background
+# workers and the MCP servers they spawn drift into live yards, and the
+# population only grows.
+#
+# The evidence is against condition 3 for that class rather than for it: `w4G`'s
+# own checkout was deleted UNDER those processes and nothing broke. So a process
+# naming a workspace herdr does not record is an orphan, and it is dropped for
+# EVERY form -- the argument is about the process, not about what the command
+# closes.
+
+def test_an_orphan_does_not_block_the_herdr_form(
+        bench, finished, standing, tmp_path):
+    """The defect: nine processes from a yard deleted weeks ago, and a refusal."""
+    standing(finished, "wGHOST")
+    socket = _herdr_session(tmp_path, "wTEST", finished)
+    decision = _run(bench, bench.helm,
+                    "herdr worktree remove --workspace wTEST",
+                    HERDR_SOCKET_PATH=str(socket))
+    assert _permitted(decision), _reason(decision)
+
+
+@pytest.mark.parametrize("form", ["rm -rf {path}", "git worktree remove {path}"])
+def test_an_orphan_does_not_block_a_form_that_closes_nothing(
+        bench, finished, standing, tmp_path, form):
+    """The orphan clause is NOT the ownership clause, and this is the difference.
+
+    Ownership asks what the command closes, so it applies to the herdr form
+    alone. An orphan's yard is already gone, so it is nobody's unfinished work
+    whatever the command is, and `rm -rf` of a finished yard has the same claim
+    on the exemption. Without this pair the two clauses would look like one.
+    """
+    standing(finished, "wGHOST")
+    socket = _herdr_session(tmp_path, "wTEST", finished)
+    decision = _run(bench, bench.helm, form.format(path=finished),
+                    HERDR_SOCKET_PATH=str(socket))
+    assert _permitted(decision), _reason(decision)
+
+
+def test_an_unreadable_session_record_drops_nothing(
+        bench, finished, standing, tmp_path):
+    """Orphan cannot be told from neighbour, so neither is dropped, and it says so.
+
+    Both candidate session files are taken away: `HERDR_SOCKET_PATH` points at a
+    directory that does not exist, and `HOME` at an empty one. Dropping on that
+    evidence would be inventing the exemption rather than establishing it, and
+    reporting a process count that rests on a lookup nobody managed would be the
+    same defect one level up.
+    """
+    process = standing(finished, "wGHOST")
+    empty_home = tmp_path / "no-herdr-here"
+    empty_home.mkdir()
+    decision = _run(bench, bench.helm, f"rm -rf {finished}",
+                    HERDR_SOCKET_PATH=str(tmp_path / "nowhere" / "herdr.sock"),
+                    HOME=str(empty_home))
+    assert _denied_by_this_wall(decision), _reason(decision) or "permitted"
+    assert str(process.pid) in _reason(decision)
+    assert "could not be read" in _reason(decision)
+
+
+# ============================================================
+# The refusal names the remedy that applies, and no other
+# ============================================================
+
+def test_a_refusal_over_processes_alone_does_not_ask_for_a_commit_or_a_merge(
+        bench, finished, standing, tmp_path):
+    """The text lied on the first live refusal.
+
+    MEASURED 2026-09-06 in HELM: the work was committed and the branch was
+    merged, and the wall still ended "commit the work in that yard and have HELM
+    merge the branch, then this command passes without a word". It named the two
+    things the operator had already done and not the one that was blocking.
+    """
+    standing(finished, "wTEST")
+    socket = _herdr_session(tmp_path, "wTEST", finished)
+    decision = _run(bench, bench.helm, f"rm -rf {finished}",
+                    HERDR_SOCKET_PATH=str(socket))
+    assert _denied_by_this_wall(decision), _reason(decision) or "permitted"
+    reason = _reason(decision)
+    assert "Commit the work in that yard" not in reason, reason
+    assert "Have HELM merge the branch" not in reason, reason
+    assert "herdr worktree remove --workspace wTEST" in reason
+
+
+def test_a_refusal_over_the_working_tree_asks_for_a_commit(bench, dirty):
+    """The paired direction: the remedy that DOES apply is still printed.
+
+    A composed message that printed nothing would satisfy the case above and be
+    useless, which is the shape of a guard that refuses everything.
+    """
+    decision = _run(bench, bench.helm, f"rm -rf {dirty}")
+    assert _denied_by_this_wall(decision), _reason(decision) or "permitted"
+    assert "Commit the work in that yard" in _reason(decision)
+
+
+def test_a_refusal_over_an_unmerged_branch_asks_for_the_merge(bench, unmerged):
+    decision = _run(bench, bench.helm, f"git worktree remove {unmerged}")
+    assert _denied_by_this_wall(decision), _reason(decision) or "permitted"
+    assert "Have HELM merge the branch" in _reason(decision)
+    assert "Commit the work in that yard" not in _reason(decision), (
+        "the tree is clean; asking for a commit sends the operator to do "
+        "something that would produce an empty one")
 
 
 def test_a_process_whose_environment_cannot_be_read_is_not_owned(
@@ -587,7 +721,8 @@ def test_a_process_whose_environment_cannot_be_read_is_not_owned(
 
     unreadable = proc_cwd.Process(4242, "claude", finished, None)
     monkeypatch.setattr(proc_cwd, "processes_in", lambda *a, **k: [unreadable])
-    named = module._yard_live_processes(finished, "wTEST")
+    named, caveat = module._yard_live_processes(finished, "wTEST")
+    assert caveat is None or "could not be read" in caveat
     assert named and "4242" in named[0], (
         f"a process with an unreadable environment was treated as belonging to "
         f"the workspace being closed: {named}")
@@ -712,22 +847,31 @@ def test_a_throwaway_worktree_in_the_temp_tree_is_permitted(bench, tmp_path):
 # The herdr spelling, which names no path at all
 # ============================================================
 
-def _herdr_session(tmp_path: Path, workspace_id: str, checkout: Path) -> Path:
+def _herdr_session(tmp_path: Path, workspace_id: str, checkout: Path,
+                   also_live: tuple[str, ...] = ()) -> Path:
     """A herdr session file mapping one workspace id to one checkout.
 
     Its own file, never the operator's: this reads herdr's real state on the
     machine, and a test that edited it would be reaching into a running
     program's records.
+
+    `also_live` adds workspaces the guard should treat as EXISTING without
+    giving them a checkout here. It is not decoration: since 2026-09-06 a
+    process naming a workspace herdr does not record is an orphan and is
+    dropped, so a case about a live NEIGHBOUR has to say that the neighbour is
+    live. Without it the case silently becomes the orphan case and asserts the
+    opposite of what it was written for.
     """
     config = tmp_path / "herdr-config"
     config.mkdir(exist_ok=True)
+    workspaces = [{
+        "id": workspace_id,
+        "worktree_space": {"checkout_path": str(checkout),
+                           "is_linked_worktree": True},
+    }]
+    workspaces += [{"id": other} for other in also_live]
     (config / "session.json").write_text(json.dumps({
-        "version": 1,
-        "workspaces": [{
-            "id": workspace_id,
-            "worktree_space": {"checkout_path": str(checkout),
-                               "is_linked_worktree": True},
-        }],
+        "version": 1, "workspaces": workspaces,
     }), encoding="utf-8")
     return config / "herdr.sock"
 

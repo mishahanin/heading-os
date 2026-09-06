@@ -4320,9 +4320,9 @@ def check_yard_write_guard(payload: dict) -> dict | None:
 #      files git does not ignore (`git status --porcelain` in THAT worktree);
 #   2. its HEAD holds commits that `main` cannot reach (`rev-list --count
 #      main..HEAD`, which answers for a detached HEAD as well as a branch);
-#   3. a process is standing in it that THIS COMMAND WOULD NOT CLOSE -- some
-#      pid's cwd is inside the directory, and it does not belong to the herdr
-#      workspace being removed.
+#   3. a LIVE process is standing in it that THIS COMMAND WOULD NOT CLOSE --
+#      some pid's cwd is inside the directory, it does not belong to the herdr
+#      workspace being removed, and the workspace it does name still exists.
 #
 # All three are checked and every unmet one is named, because "commit it" and
 # "it is still running" are different instructions and the operator gets the
@@ -4355,12 +4355,46 @@ def check_yard_write_guard(payload: dict) -> dict | None:
 # read back as absent. A process whose environment cannot be read, or which
 # carries no workspace or a different one, is FOREIGN and still refuses.
 #
-# What that clause does not close, stated rather than left to be found: an
+# THE ORPHAN CLAUSE, which is the same correction a second time. The first
+# version of condition 3 asked "is anybody in it" and never passed; the ownership
+# clause fixed that and STILL never passed, for a reason nobody had looked for.
+# MEASURED 2026-09-06 in HELM, on the first real removal after the merge:
+# fourteen processes stood in this yard, five of them its own, and NINE named
+# `w4G` -- a yard deleted long ago, absent from `herdr workspace list` and from
+# `session.json`. They are Claude Code's warmed background workers and the MCP
+# servers they spawn: their `PWD` at exec named the yard they were started in,
+# and their cwd has since wandered into a live one. The population only grows.
+#
+# So a wall that stopped at ownership would refuse EVERY future deletion, for a
+# reason having nothing to do with the work in the yard. That is the third
+# instance of one shape: an exemption whose condition never arrives in practice.
+#
+# The decisive evidence is against condition 3 for this class rather than for
+# it: `yard-reachability` was deleted UNDER these very processes and nothing
+# broke. They outlived the removal of their own directory and moved on. The
+# danger the condition exists for -- a process left holding a deleted cwd -- is
+# empirically not realised for them, and structurally cannot be: a process whose
+# workspace no longer exists is not somebody's unfinished work standing here.
+#
+# So a process naming a workspace that herdr does not record is an ORPHAN and is
+# dropped, for EVERY form: the argument is about the process, not about what the
+# command closes, and `rm -rf` of a finished yard has the same claim on it. A
+# process naming a LIVE workspace other than the one being closed still refuses,
+# and so does one naming none at all. When herdr's record cannot be read, orphan
+# cannot be told from neighbour, so nothing is dropped and the refusal says why.
+#
+# Deliberately NOT argv. Telling a warmed worker by `bg-spare` in its command
+# line would be a list of the process shapes seen this week, which is the same
+# mistake as writing a rule as a list of verbs; the workspace either exists or
+# it does not, and that is a property of the machine rather than of a spelling.
+#
+# What these clauses do not close, stated rather than left to be found: an
 # environment variable is a claim the process makes about itself, so anything
-# able to set `HERDR_WORKSPACE_ID` can present itself as owned. It buys nothing
-# for an adversary here -- the exemption reaches condition 3 only, conditions 1
-# and 2 are untouched, and the command it applies to really does close that
-# workspace -- but it is a claim rather than a proof and is written as one.
+# able to set `HERDR_WORKSPACE_ID` can present itself as owned, or as an orphan
+# by naming a workspace that does not exist. It buys nothing for an adversary
+# here -- both exemptions reach condition 3 only, conditions 1 and 2 are
+# untouched, and unfinished WORK is what those two hold -- but it is a claim
+# rather than a proof and is written as one.
 #
 # WHAT IT DOES NOT DO. It never removes, commits, merges or kills anything. A
 # yard whose tree is clean, whose commits `main` can reach, and in which nothing
@@ -4635,83 +4669,193 @@ def _yard_git_answer(root: Path, args: list[str]) -> tuple[bool, str]:
 _HERDR_WORKSPACE_ENV = "HERDR_WORKSPACE_ID"
 
 
-def _yard_live_processes(root: Path,
-                         owned_by: str | None = None) -> list[str] | None:
-    """`pid (name)` per process standing inside `root`, or None if `/proc` failed.
+def _yard_live_workspaces() -> set[str] | None:
+    """Every workspace id herdr currently records, or None if nothing was read.
 
-    `owned_by` is the herdr workspace id the COMMAND is about to close, and only
-    the herdr form has one. Processes belonging to it are dropped, because the
-    removal closes them; everything else is reported, including a process whose
-    environment could not be read, which cannot be shown to belong to anything.
+    None is the "could not look" answer again, and the caller must not read it
+    as an empty set: with no record, a process naming a workspace is
+    indistinguishable from an orphan, and dropping it would be inventing the
+    exemption rather than establishing it.
+    """
+    ids: set[str] = set()
+    read_any = False
+    for path in _yard_herdr_session_files():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"[_dispatch:yard-deletion] {path} unreadable "
+                  f"({type(exc).__name__}: {exc})", file=sys.stderr)
+            continue
+        read_any = True
+        if not isinstance(data, dict):
+            continue
+        for workspace in data.get("workspaces") or []:
+            if isinstance(workspace, dict) and workspace.get("id"):
+                ids.add(str(workspace["id"]))
+    return ids if read_any else None
 
-    The question is asked of `scripts/utils/proc_cwd.processes_in`, which owns
-    it for the three callers that want it; the import is deferred because this
-    hook runs on every tool call and only ever reaches here on a deletion.
 
-    None is NOT an empty list. "Could not look" and "nobody is there" send the
-    operator opposite ways, and the caller refuses on the first.
+def _yard_live_processes(
+        root: Path,
+        owned_by: str | None = None) -> tuple[list[str] | None, str | None]:
+    """(names, caveat) for the processes standing inside `root` that count.
+
+    `names` is None when `/proc` could not be read at all, which is NOT an empty
+    list: "could not look" and "nobody is there" send the operator opposite
+    ways, and the caller refuses on the first.
+
+    Two kinds are dropped, and neither is a weakening of the condition:
+
+      * the workspace the COMMAND closes (`owned_by`, herdr form only) -- the
+        removal closes those, so they are part of the operation;
+      * an ORPHAN, whose workspace herdr no longer records at all. Its yard is
+        already gone, so it is not unfinished work standing here.
+
+    Everything else is reported: a live neighbouring workspace, a process naming
+    no workspace, and one whose environment could not be read.
+
+    `caveat` is a sentence for the refusal when the drop could not be made
+    honestly, so the operator is never shown a process count that rests on a
+    lookup nobody managed.
+
+    The process question is asked of `scripts/utils/proc_cwd.processes_in`,
+    which owns it for the callers that want it; the import is deferred because
+    this hook runs on every tool call and only ever reaches here on a deletion.
     """
     from scripts.utils.proc_cwd import processes_in
-    found = processes_in(root, nested=True,
-                         env_names=(_HERDR_WORKSPACE_ENV,) if owned_by else ())
+    found = processes_in(root, nested=True, env_names=(_HERDR_WORKSPACE_ENV,))
     if found is None:
-        return None
-    if owned_by:
-        found = [p for p in found
-                 if p.env is None
-                 or p.env.get(_HERDR_WORKSPACE_ENV) != owned_by]
-    return [f"{p.pid} ({p.comm})" if p.comm else str(p.pid) for p in found]
+        return None, None
+
+    live = _yard_live_workspaces()
+    kept: list[str] = []
+    for process in found:
+        workspace = (process.env or {}).get(_HERDR_WORKSPACE_ENV)
+        if owned_by and workspace == owned_by:
+            continue
+        if workspace and live is not None and workspace not in live:
+            continue                   # an orphan: its own yard is already gone
+        kept.append(f"{process.pid} ({process.comm})" if process.comm
+                    else str(process.pid))
+
+    caveat = None
+    if kept and live is None:
+        caveat = (" herdr's session record could not be read, so a process "
+                  "naming a workspace that no longer exists could not be told "
+                  "from one naming a live neighbour, and none were dropped")
+    return kept, caveat
 
 
-def _yard_unfinished(root: Path, owned_by: str | None = None) -> list[str]:
-    """Every reason `root` is not finished. Empty means it is safe to delete.
+def _yard_unfinished(root: Path,
+                     owned_by: str | None = None) -> list[tuple[str, str]]:
+    """Every reason `root` is not finished, as (kind, sentence).
+
+    Empty means it is safe to delete. The KIND is carried rather than inferred
+    from the sentence, because the refusal has to tell the operator what to DO,
+    and "commit it", "have it merged" and "something is standing in it" are
+    three different instructions. Until 2026-09-06 one closing paragraph gave
+    all three unconditionally, so a refusal over a live process ended "commit
+    the work and have HELM merge the branch, then this passes without a word"
+    against a yard whose work was committed and whose branch was merged. A
+    remedy that does not apply is a wall lying about itself.
 
     `owned_by` is passed through to condition 3 only. Conditions 1 and 2 do not
     know which command is asking and must not: the incident this wall was
     written for is a `--force` over uncommitted work, and no spelling of the
     removal makes that survivable.
     """
-    unmet: list[str] = []
+    unmet: list[tuple[str, str]] = []
 
     ok, answer = _yard_git_answer(root, ["status", "--porcelain"])
     if not ok:
-        unmet.append(f"its working tree could not be read ({answer[:200]}), so "
-                     f"whether it holds uncommitted work is UNKNOWN, not no")
+        unmet.append(("unknown",
+                      f"its working tree could not be read ({answer[:200]}), so "
+                      f"whether it holds uncommitted work is UNKNOWN, not no"))
     elif answer.strip():
         changed = len([line for line in answer.splitlines() if line.strip()])
-        unmet.append(f"{changed} uncommitted change(s) in its working tree "
-                     f"(modified tracked files, or untracked files git does not "
-                     f"ignore)")
+        unmet.append(("tree",
+                      f"{changed} uncommitted change(s) in its working tree "
+                      f"(modified tracked files, or untracked files git does "
+                      f"not ignore)"))
 
     ok, answer = _yard_git_answer(root, ["rev-list", "--count", "main..HEAD"])
     if not ok:
-        unmet.append(f"its commits could not be compared against `main` "
-                     f"({answer[:200]}), so whether the branch is merged is "
-                     f"UNKNOWN, not yes")
+        unmet.append(("unknown",
+                      f"its commits could not be compared against `main` "
+                      f"({answer[:200]}), so whether the branch is merged is "
+                      f"UNKNOWN, not yes"))
     else:
         try:
             ahead = int(answer.strip() or "0")
         except ValueError:
             ahead = -1
         if ahead < 0:
-            unmet.append(f"`rev-list --count main..HEAD` answered {answer.strip()!r}, "
-                         f"which is not a count, so whether the branch is merged "
-                         f"is UNKNOWN")
+            unmet.append(("unknown",
+                          f"`rev-list --count main..HEAD` answered "
+                          f"{answer.strip()!r}, which is not a count, so whether "
+                          f"the branch is merged is UNKNOWN"))
         elif ahead:
-            unmet.append(f"{ahead} commit(s) on its HEAD that `main` cannot reach")
+            unmet.append(("branch",
+                          f"{ahead} commit(s) on its HEAD that `main` cannot "
+                          f"reach"))
 
-    live = _yard_live_processes(root, owned_by)
+    live, caveat = _yard_live_processes(root, owned_by)
     if live is None:
-        unmet.append("`/proc` could not be enumerated, so whether a session is "
-                     "standing in it is UNKNOWN, not no")
+        unmet.append(("unknown",
+                      "`/proc` could not be enumerated, so whether a session is "
+                      "standing in it is UNKNOWN, not no"))
     elif live:
         shown = ", ".join(live[:6])
         if len(live) > 6:
             shown += f", and {len(live) - 6} more"
         closes = (" that this command would not close" if owned_by else "")
-        unmet.append(f"{len(live)} process(es) standing in it{closes}: {shown}")
+        unmet.append(("processes",
+                      f"{len(live)} live process(es) standing in it{closes}: "
+                      f"{shown}{'.' + caveat if caveat else ''}"))
 
     return unmet
+
+
+def _yard_deletion_remedies(unmet: list[tuple[str, str]], form: str, root: Path,
+                            closes: str | None) -> str:
+    """One instruction per unmet condition, and none for a condition that holds.
+
+    Composed from the KINDS rather than printed unconditionally. The sentence
+    this replaced ended "then this command passes without a word" under a
+    refusal caused by a running process, against a yard whose work was
+    committed and whose branch was merged, so it named two things the operator
+    had already done and not the one that was blocking.
+    """
+    kinds = {kind for kind, _ in unmet}
+    lines: list[str] = []
+    if "tree" in kinds:
+        lines.append("  * Commit the work in that yard. `--force` does not lift "
+                     "this: it switches off git's own version of that check, "
+                     "which is what made this wall necessary.")
+    if "branch" in kinds:
+        lines.append("  * Have HELM merge the branch. A worktree is the only "
+                     "place its unmerged commits exist.")
+    if "processes" in kinds:
+        if closes is not None:
+            lines.append("  * Those processes belong to a workspace this "
+                         "command does not close, so removing this one leaves "
+                         "them holding a deleted directory. Wait for them, or "
+                         "close the workspace that owns them.")
+        else:
+            # Only on this path: the lookup is a file read, and a command that
+            # passes must not pay for it.
+            workspace = _yard_herdr_workspace_for(root)
+            spelling = (f"`herdr worktree remove --workspace {workspace}`"
+                        if workspace else
+                        "`herdr worktree remove --workspace <this yard's id>`")
+            lines.append(f"  * `{form}` closes nothing, so every process above "
+                         f"would be left holding a deleted directory. "
+                         f"{spelling} closes this yard's own session as part of "
+                         f"the removal, and is the last step of the cycle.")
+    if "unknown" in kinds:
+        lines.append("  * Establish what could not be read above and run it "
+                     "again. Nothing here guesses in the permissive direction.")
+    return "\n".join(lines)
 
 
 def check_yard_deletion_guard(payload: dict) -> dict | None:
@@ -4756,42 +4900,15 @@ def check_yard_deletion_guard(payload: dict) -> dict | None:
                 unmet = _yard_unfinished(root, closes)
                 if not unmet:
                     continue
-                reasons = "\n".join(f"  * {reason}" for reason in unmet)
+                reasons = "\n".join(f"  * {text}" for _, text in unmet)
                 aimed = ("" if root == target
                          else f"\nAimed at {target}, which contains it.")
-                # A command that closes nothing, refused over processes alone,
-                # is the case where the operator is holding the wrong spelling
-                # rather than unfinished work. Name the right one, with the id.
-                # Only then: the lookup is a file read, and a command that
-                # passes must not pay for it.
-                hint = ""
-                if closes is None and all("process(es)" in r for r in unmet):
-                    workspace = _yard_herdr_workspace_for(root)
-                    if workspace:
-                        hint = (
-                            f"\n\nThose processes are this yard's own session, "
-                            f"and `{form}` does not close it: it would leave "
-                            f"every one of them with a deleted working "
-                            f"directory. `herdr worktree remove --workspace "
-                            f"{workspace}` closes the session as part of the "
-                            f"removal, and is the last step of the cycle."
-                        )
                 return _yard_deny(
                     f"YARD deletion guard — intentional policy block, not an "
                     f"error. This `{form}` would erase a worktree that is NOT "
                     f"finished:\n\n  {root}{aimed}\n\n"
-                    f"What is unfinished:\n{reasons}{hint}\n\n"
-                    f"A yard is finished when all three hold: its tree is "
-                    f"clean, its commits are reachable from `main`, and nothing "
-                    f"stands in it that this command would not close. Until "
-                    f"then, deleting it is the one action nothing can undo — "
-                    f"the branch is unmerged and the working tree exists in "
-                    f"exactly one place.\n\n"
-                    f"Commit the work in that yard and have HELM merge the "
-                    f"branch. Then this command passes without a word. "
-                    f"`--force` does not lift this: it switches off git's own "
-                    f"version of the first check, which is what made this wall "
-                    f"necessary."
+                    f"What is unfinished:\n{reasons}\n\n"
+                    f"What to do:\n{_yard_deletion_remedies(unmet, form, root, closes)}"
                 )
     return None
 

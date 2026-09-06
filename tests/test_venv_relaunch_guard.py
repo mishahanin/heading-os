@@ -244,17 +244,31 @@ def test_a_vanished_untracked_file_is_dropped_but_a_tracked_one_is_not():
     untracked path must be dropped; a tracked path really did disappear from a
     checkout and must still fail.
 
-    THE GHOST NEEDS ITS OWN NAME. This test first used
-    `tests/test_turn_check_slow_fixture.py`, the same path the lane test
-    writes, and its `unlink(missing_ok=True)` then deleted that test's fixture
-    out from under it whenever the two landed on different xdist workers at the
-    same moment. `test_the_test_lane_deselects_slow_marked_tests` failed on its
-    own cleanup with FileNotFoundError, once in five full-suite runs on
-    2026-08-23. A fix for a race that introduced a second race; the name below
-    is unique to this test and must stay that way.
+    THE GHOST IS NO LONGER A FILE, and that is the third repair of this same
+    shape. It began as `tests/test_turn_check_slow_fixture.py`, the path the
+    lane test writes, and the two deleted each other's scratch under xdist
+    (2026-08-23, once in five full-suite runs). It was then given a private
+    name, which is what this docstring used to defend. The name was never the
+    problem: a real `test_*.py` in the live tests directory is collected by
+    pytest's OWN collector, and on 2026-09-06 a sibling planted file failed a
+    full run with a bare `ERROR tests/...ImportError` for exactly that reason.
+
+    The requirement here is only that the scanned function's `rglob` YIELD a
+    path that is untracked and unreadable. Yielding it is not the same as
+    creating it: `rglob` is patched for the one call, so no file ever exists,
+    no collector can see one, and the ownership scan this test used to run over
+    the whole live tests directory (itself a walk that lost the same race on
+    2026-08-25) is gone with it -- two tests cannot collide over a file neither
+    of them writes.
+
+    The lane test's own fixture moved under `tmp_path` the same day; this one
+    could not use that remedy, because the function it drives scans the REAL
+    tests tree through a module global and asserts a floor of 380 modules
+    against it.
     """
     real_read = Path.read_text
-    ghost = TESTS / "test_venv_guard_vanish_probe.py"   # untracked, ours alone
+    real_rglob = Path.rglob
+    ghost = TESTS / "test_venv_guard_vanish_probe.py"   # never written to disk
     tracked = TESTS / "conftest.py"                      # not matched by rglob
     victim = {"path": ghost}
 
@@ -263,43 +277,30 @@ def test_a_vanished_untracked_file_is_dropped_but_a_tracked_one_is_not():
             raise FileNotFoundError(2, "No such file or directory", str(self))
         return real_read(self, *a, **kw)
 
+    def _rglob(self, pattern, *a, **kw):
+        found = real_rglob(self, pattern, *a, **kw)
+        if self == TESTS and pattern == "test_*.py":
+            return list(found) + [ghost]
+        return found
+
     assert not _tracked(ghost.relative_to(ROOT).as_posix()), (
         "the probe path is tracked now; pick another untracked example"
     )
     assert _tracked(tracked.relative_to(ROOT).as_posix())
-    # No other test may write this path, or the two will delete each other's
-    # scratch file under xdist. That is exactly how this test broke the lane
-    # test on 2026-08-23.
-    # This scan needs the SAME mid-scan tolerance the test exists to verify,
-    # and until 2026-08-25 it did not have it. `errors="replace"` covers a
-    # decode failure, never a missing file, so this loop walked the live tests
-    # directory with a bare read while the lane test wrote and deleted
-    # `tests/test_turn_check_slow_fixture.py` beside it. It lost that race in a
-    # full-suite run and failed with FileNotFoundError - the very race
-    # documented at length two functions above. A path that vanishes mid-scan
-    # was never checked in, so it cannot own the ghost name.
-    owners = []
-    for candidate in sorted(TESTS.rglob("test_*.py")):
-        if candidate.name == Path(__file__).name:
-            continue
-        try:
-            body = candidate.read_text(encoding="utf-8", errors="replace")
-        except FileNotFoundError:
-            continue
-        if ghost.name in body:
-            owners.append(candidate.name)
-    assert owners == [], f"{ghost.name} is also written by {owners}"
+    assert not ghost.exists(), (
+        "the ghost is on disk; this test creates no file and something else "
+        "now owns that name"
+    )
 
     monkeypatch = pytest.MonkeyPatch()
     try:
         # The untracked ghost: present to rglob, absent to read. Must pass.
-        ghost.write_text("# transient\n", encoding="utf-8")
+        monkeypatch.setattr(Path, "rglob", _rglob)
         monkeypatch.setattr(Path, "read_text", _read)
         try:
             test_no_test_module_carries_its_own_copy_of_the_guard()
         finally:
             monkeypatch.undo()
-            ghost.unlink(missing_ok=True)
 
         # A TRACKED test file that vanishes is a real finding.
         #
@@ -319,7 +320,6 @@ def test_a_vanished_untracked_file_is_dropped_but_a_tracked_one_is_not():
             test_no_test_module_carries_its_own_copy_of_the_guard()
     finally:
         monkeypatch.undo()
-        ghost.unlink(missing_ok=True)
 
 
 def _candidate_interpreters() -> list:

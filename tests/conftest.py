@@ -1382,6 +1382,45 @@ _WORKER_SPAWN_ATTRIBUTION: dict[str, list] = {}
 # separate and smaller, applied to the aggregate.
 _WORKER_ATTRIBUTION_ROWS = 100
 
+# THE DISTINCT-TEST COUNT, and why it is not `len(_WORKER_SPAWN_ATTRIBUTION)`.
+#
+# The attribution map above is a REPORT: each worker sends its top
+# `_WORKER_ATTRIBUTION_ROWS` and the rest arrives as a bare number, so its
+# length answers "how many tests survived the slice", not "how many tests
+# spawned a reachable child". These two names carry the second question, and
+# they carry it as a UNION OF DIGESTS rather than a sum of counts, because a
+# sum would double-count `UNKNOWN_TEST` once per worker.
+#
+# WHY A SECOND MEASURE EXISTS AT ALL. MEASURED 2026-09-06 in HELM: nine full
+# runs over ONE unchanged tree reported 6010, 6115, 6174, 6209, 6265, 6276,
+# 6361, 6370 reachable children (a ninth was under the threshold and so printed
+# nothing). Spread 360 on a mean of 6196, +-3%, with no edit between them; three
+# of those were taken under flock with exactly one pytest controller on the
+# machine, so it is not contention with a neighbour. A child COUNT depends on
+# the scheduler -- how far a test got, how the xdist workers were packed. The
+# SET of tests that spawn a reachable child does not: a test either spawns one
+# or it does not.
+#
+# THE PREDICTION HELD, AND SO DID THE FLAP UNTIL THE WIRE WAS FIXED. Measured
+# 2026-09-06 in a YARD over ten full runs of one tree: the union of every
+# process's raw map, dumped straight out of the guard, was 2677/2678/2678/2679
+# across four of them, a spread of TWO, while the number printed below ranged
+# 2156 to 2454. The gap was never the metric. Two or three workers per run died
+# inside xdist's `workerfinished` send on an unencodable byte and their whole
+# report was lost: `_wire_safe` above, and
+# `tests/test_a_worker_that_died_of_a_byte_in_a_filename.py`. After that repair
+# three consecutive runs at loads 0.68, 11.10 and 14.00 printed 6809 children
+# and 2679 distinct tests, identical to the digit, all 18 workers delivering.
+# The threshold is still deliberately unset: the number has to be measured in
+# HELM, where the count is higher, and frozen by the operator.
+_WORKER_SPAWNER_DIGESTS: set[str] = set()
+
+# Did any process's attribution map hit `_CHILD_SPAWN_BY_TEST_CAP`? Past the cap
+# a nodeid never seen before is dropped from the map, so the digest union is a
+# LOWER BOUND and the report has to say so rather than print a number that reads
+# exact.
+_WORKER_MAP_CAPPED = [0]
+
 
 # ============================================================
 # Scratch left behind in the SHARED temp directory
@@ -1393,6 +1432,58 @@ _WORKER_ATTRIBUTION_ROWS = 100
 # controller prints.
 
 from tests import tmp_leak_guard as _tmpguard  # noqa: E402
+
+
+def _wire_safe(value):
+    """The same value with every string encodable as UTF-8.
+
+    THE ONE PLACE ANYTHING GOES INTO `workeroutput`, and it is a repair, not a
+    precaution. MEASURED 2026-09-06, full suite, `-n auto`: two workers per run
+    died at teardown with
+
+        UnicodeEncodeError: 'utf-8' codec can't encode character '\\udcff'
+        in position 88: surrogates not allowed
+
+    out of `execnet.gateway_base._write_unicode_string`. Every test passed;
+    the deaths happen in xdist's `workerfinished` send, AFTER the last test, so
+    the run is green and only a `[gwN] node down:` line in the middle of the
+    output says otherwise. The controller then has no `workeroutput` for that
+    node at all, so THE WHOLE WORKER'S REPORT IS LOST -- its child count and its
+    distinct-test digests together.
+
+    Where the byte comes from: `tests/test_a_push_wall_that_refused_the_root_it
+    _was_given.py` and `tests/test_a_diagnostic_that_crashed_the_push_it_
+    narrated.py` deliberately build a repository whose DIRECTORY NAME holds a
+    non-UTF-8 byte and run `git init` on it. `sys.argv` and `os.environ` carry
+    that byte back as a surrogate escape, the guard records the command string
+    verbatim as an example, and the example rides `overlay_reachable_by_test`
+    onto the wire.
+
+    WHAT THIS COST, measured the same day: which worker holds those tests moves
+    with xdist's scheduling, so 0 to 3 workers' reports vanished per run and the
+    gate's number moved 100 to 400 with no change in the tree. That is the whole
+    of the +-5% flap this file's ratchet has been blamed for.
+
+    `errors="replace"` rather than `surrogatepass`: the byte is data in an
+    example string nobody parses, and the `?` that ENCODE-side "replace"
+    substitutes is honest about what was there. `surrogatepass` would put the surrogate back on the
+    wire and re-open the same hole one layer down.
+    """
+    if isinstance(value, str):
+        return value.encode("utf-8", "replace").decode("utf-8")
+    if isinstance(value, tuple):
+        return tuple(_wire_safe(v) for v in value)
+    if isinstance(value, list):
+        return [_wire_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {_wire_safe(k): _wire_safe(v) for k, v in value.items()}
+    return value
+
+
+def _send_upward(output, **values):
+    """Put every value on the wire, wire-safe, in the one place that can be."""
+    for key, value in values.items():
+        output[key] = _wire_safe(value)
 
 _TMP_BEFORE: set[str] = set()
 _TMP_LEAK_BASELINE = _ENGINE_ROOT / "config" / "tmp-leak-baseline.json"
@@ -1504,8 +1595,14 @@ def _tmp_leak_sessionfinish(session):
         # `-n auto`; a guard that only fires where nobody looks is decoration.
         output = getattr(session.config, "workeroutput", None)
         if output is not None:
-            output["tmp_leak_survivors"] = len(mine)
-            output["tmp_leak_by_test"] = _tmpguard.survivors_by_test(_WORKER_TMP_ROWS)
+            # Through `_send_upward`, not by assignment: a leaked scratch path
+            # can hold the same undecodable byte the overlay example does, and
+            # one unencodable string anywhere in this dict kills the whole
+            # report. See `_wire_safe`.
+            _send_upward(
+                output,
+                tmp_leak_survivors=len(mine),
+                tmp_leak_by_test=_tmpguard.survivors_by_test(_WORKER_TMP_ROWS))
         return
 
     total = len(mine) + _WORKER_TMP_TOTAL[0]
@@ -1614,6 +1711,11 @@ def pytest_testnodedown(node, error):
         output.get("overlay_reachable_by_test") or (),
         unattributed=int(output.get("overlay_reachable_unattributed", 0) or 0),
         into=_WORKER_SPAWN_ATTRIBUTION)
+    # The distinct-test measure rides the same message. A UNION, so a worker
+    # that reports nothing costs nothing and a nodeid seen twice counts once.
+    _WORKER_SPAWNER_DIGESTS.update(
+        output.get("overlay_reachable_test_digests") or ())
+    _WORKER_MAP_CAPPED[0] += int(output.get("overlay_reachable_map_capped", 0) or 0)
     # Same fold, for the temp-directory guard. It rides this hook rather than
     # adding a second one: xdist gives each node exactly one teardown, and two
     # implementations of `pytest_testnodedown` in one conftest is a shape that
@@ -1661,6 +1763,33 @@ def _overlay_reachability_baseline() -> int:
         return int(data["reachable_children"])
     except (OSError, ValueError, KeyError, TypeError):
         return 0
+
+
+def _overlay_reachable_tests_baseline():
+    """The frozen distinct-test count, or None when the operator has not set one.
+
+    NOT the strict-on-absence shape of the function above, and the difference is
+    deliberate. That one guards a threshold that EXISTS: a deleted file must not
+    silently disarm it. This one guards a key that is not there yet. Until the
+    operator writes `reachable_tests`, the distinct count is measured and
+    printed beside the enforced number and judges nothing -- a threshold nobody
+    chose is a threshold nobody can be held to.
+
+    A corrupt or missing FILE also returns None here rather than 0, because the
+    same file already fails the child ratchet strict; two red gates over one
+    unreadable file would say the same thing twice and hide which key was
+    actually wrong.
+    """
+    import json
+    try:
+        data = json.loads(_REACHABILITY_BASELINE.read_text(encoding="utf-8"))
+        value = data["reachable_tests"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return None
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -1749,16 +1878,32 @@ def pytest_sessionfinish(session, exitstatus):
         # that only fires where nobody looks is decoration.
         output = getattr(session.config, "workeroutput", None)
         if output is not None:
-            output["overlay_reachable"] = reachable
             # ATTRIBUTION, not just the total. Bounded on purpose: this is
             # pickled back through execnet, so the whole map is not sent and
             # the top slice is. Whatever the slice leaves behind is reported as
             # a number in the same breath, so the controller never presents a
             # partial list as the run.
             rows = _guard.top_spawners(_WORKER_ATTRIBUTION_ROWS)
-            output["overlay_reachable_by_test"] = rows
-            output["overlay_reachable_unattributed"] = max(
-                0, reachable - sum(count for _, _, count in rows))
+            # EVERY value through `_send_upward`. One unencodable string in this
+            # dict does not lose one field, it loses the entire worker: execnet
+            # raises inside the `workerfinished` send and the node dies with no
+            # `workeroutput` at all. Measured, and the whole of this gate's
+            # run-to-run flap: `_wire_safe`.
+            _send_upward(
+                output,
+                overlay_reachable=reachable,
+                overlay_reachable_by_test=rows,
+                overlay_reachable_unattributed=max(
+                    0, reachable - sum(count for _, _, count in rows)),
+                # The WHOLE map's key set, digested, not a slice of it. The rows
+                # above are a report and are sliced for the wire; this is the
+                # measure, and a sliced measure is the "baseline frozen from a
+                # truncated view" trap wearing a different name. Sorted for a
+                # deterministic wire image; the controller takes a set union.
+                overlay_reachable_test_digests=sorted(_guard.spawner_digests()),
+                overlay_reachable_map_capped=int(
+                    len(_guard._CHILD_SPAWNS_BY_TEST)
+                    >= _guard._CHILD_SPAWN_BY_TEST_CAP))
     else:
         reachable += _WORKER_REACHABLE_TOTAL[0]
 
@@ -1777,6 +1922,28 @@ def pytest_sessionfinish(session, exitstatus):
     enforced = _OWNS_OVERLAY_WATCH and not worker and not aggregation_lost
     over = enforced and reachable > baseline
 
+    # THE SECOND MEASURE: how many DISTINCT tests spawned such a child.
+    #
+    # Same invariant, a metric that does not move with the scheduler. See
+    # `_WORKER_SPAWNER_DIGESTS` for the nine HELM runs that made this necessary.
+    # The controller unions the workers' digests with its OWN: the execnet
+    # bootstrap of each worker is a real spawn made by the controller and it is
+    # already inside `reachable`, so dropping it here would make the two numbers
+    # describe different runs.
+    distinct_digests = set(_guard.spawner_digests())
+    if not worker:
+        distinct_digests |= _WORKER_SPAWNER_DIGESTS
+    distinct_tests = len(distinct_digests)
+    map_capped = bool(_WORKER_MAP_CAPPED[0]) or (
+        len(_guard._CHILD_SPAWNS_BY_TEST) >= _guard._CHILD_SPAWN_BY_TEST_CAP)
+    tests_baseline = _overlay_reachable_tests_baseline()
+    # A threshold the operator has not written is not a threshold. Until
+    # `reachable_tests` exists in the baseline file this number is measured,
+    # printed and enforced by nothing; the child ratchet above is untouched and
+    # remains the gate.
+    tests_enforced = enforced and tests_baseline is not None
+    over_tests = tests_enforced and distinct_tests > tests_baseline
+
     established = [
         f"{len(complaints)} observation(s) about the overlay tree: "
         + "; ".join(complaints),
@@ -1788,6 +1955,13 @@ def pytest_sessionfinish(session, exitstatus):
                  "NOT the run's" if aggregation_lost
             else "nested pytest"))
         + ")",
+        f"{distinct_tests} distinct test(s) spawned at least one such child"
+        + (", a LOWER BOUND: an attribution map hit its "
+           f"{_guard._CHILD_SPAWN_BY_TEST_CAP}-test cap" if map_capped else "")
+        + (f" (frozen baseline {tests_baseline})" if tests_enforced
+           else " (measured, enforced by nothing: no `reachable_tests` key in "
+                f"{_REACHABILITY_BASELINE.name}" if tests_baseline is None
+           else " (baseline set but not enforced for the reason above)"),
     ]
     # TOP OFFENDERS, and this is what makes the number actionable.
     #
@@ -1834,25 +2008,46 @@ def pytest_sessionfinish(session, exitstatus):
         "traceback; it did not fire, so no test in this interpreter wrote there."
     )
 
-    if not over and not complaints:
+    # `HEADING_OS_OVERLAY_REPORT=1` forces the NOTE on a run that is inside
+    # every budget. It exists for one job: the distinct-test count above cannot
+    # be READ on a green run, and the operator has to read it before choosing a
+    # `reachable_tests` threshold. It only ever adds a line -- there is no value
+    # of it that suppresses a report or clears an exit status.
+    #
+    # SCOPED TO THE REAL SESSION BY IDENTITY, for the reason written out at
+    # `_REAL_SESSION_CONFIG`: several tests next door drive this hook with a
+    # SYNTHETIC session and assert that a quiet run says nothing. A bare
+    # environment read would turn all of them red for the length of the very
+    # measurement this variable exists to take.
+    forced = bool(os.environ.get("HEADING_OS_OVERLAY_REPORT")) and (
+        session.config is _REAL_SESSION_CONFIG)
+    failing = over or over_tests
+    if not failing and not complaints and not forced:
         return   # nothing observed and nothing new reached: say nothing
 
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     if reporter is not None:
         reporter.write_line("")
-        label = "ERROR" if over else "NOTE"
+        label = "ERROR" if failing else "NOTE"
         reporter.write_line(f"{label}: overlay watch. " + " | ".join(established),
-                            red=over, yellow=not over)
+                            red=failing, yellow=not failing)
         reporter.write_line(not_established, yellow=True)
-        if over:
+        if over or over_tests:
             first = (f" Start with {offenders[0][0]} ({offenders[0][2]} spawn(s))."
                      if offenders else
                      " No test could be named: no worker reported attribution.")
+        if over:
             reporter.write_line(
                 f"More children reached the live data root than the frozen "
                 f"{baseline}. Pass HEADING_OS_DATA pointing at a tmp_path in "
                 f"the spawning test's subprocess env." + first, red=True)
-    if over:
+        if over_tests:
+            reporter.write_line(
+                f"More distinct tests spawned a child that reached the live "
+                f"data root than the frozen {tests_baseline}. Pass "
+                f"HEADING_OS_DATA pointing at a tmp_path in the spawning "
+                f"test's subprocess env." + first, red=True)
+    if failing:
         session.exitstatus = 1
 
 

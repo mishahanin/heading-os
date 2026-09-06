@@ -101,6 +101,13 @@ DENIAL_MECHANISMS = (
     # state -- and zero-with-a-name is exactly what this list exists to tell
     # apart from absent-entirely.
     "check_yard_write_guard",
+    # Added 2026-09-06 with the wall itself. It refuses deleting a worktree of
+    # this repository whose tree is dirty, whose HEAD `main` cannot reach, or
+    # that a process is standing in. The ordinary end of every task is a
+    # FINISHED yard, which it passes in silence, so a long run of zero catches
+    # is exactly the intended state and the reason this list exists: absent
+    # would read the same and mean the wall is gone.
+    "check_yard_deletion_guard",
 )
 
 # ============================================================
@@ -175,6 +182,13 @@ WALL_REASONS = {
         "both are recorded history rather than a correction, and the write "
         "into the overlay this wall PERMITS is the measure of how narrowly it "
         "is aimed",
+    "check_yard_deletion_guard":
+        "a worktree is the only copy of what is in it, since its branch is "
+        "unmerged while the task runs and its working tree exists in exactly "
+        "one place, so an early deletion is not a correction but a loss; the "
+        "asymmetry is total, because over-friction costs a commit and a merge "
+        "the task owed anyway while under-friction costs work that no longer "
+        "exists anywhere",
 }
 
 WALLS = tuple(WALL_REASONS)

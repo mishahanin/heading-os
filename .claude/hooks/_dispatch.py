@@ -3736,6 +3736,29 @@ def _yard_segment_is_read_only(segment: str) -> bool:
     return verb in _YARD_READ_ONLY_VERBS
 
 
+def _yard_follow_cd(words: list[str], current: Path) -> Path:
+    """Where a `cd` link leaves the working directory.
+
+    An unresolvable `cd` leaves `current` where it was, which is the safe
+    direction: the tracked directory stays the last one a guard could actually
+    name, so a later segment is still judged against a real path rather than
+    against a guess. A directory spelled through a shell variable or a command
+    substitution (`cd "$HOME/..."`) is one of those, so only literal paths move
+    it.
+
+    One function, two callers: `check_yard_write_guard` and
+    `check_yard_deletion_guard` both walk a command link by link and both have
+    to know where each link would run. The second copy is the one that stops
+    being fixed.
+    """
+    if len(words) > 1 and not words[1].startswith("-"):
+        candidate = Path(words[1].strip("'\""))
+        candidate = candidate if candidate.is_absolute() else current / candidate
+        with contextlib.suppress(OSError):
+            return candidate.resolve()
+    return current
+
+
 def _yard_git_subcommand(words: list[str]) -> str:
     """The git verb of one link, or "".
 
@@ -4170,15 +4193,7 @@ def check_yard_write_guard(payload: dict) -> dict | None:
         verb = words[0].rsplit("/", 1)[-1]
 
         if verb == "cd":
-            if len(words) > 1 and not words[1].startswith("-"):
-                candidate = Path(words[1].strip("'\""))
-                candidate = candidate if candidate.is_absolute() else current / candidate
-                # An unresolvable `cd` leaves `current` where it was, which is
-                # the safe direction: the tracked directory stays the last one
-                # this guard could actually name, so a later segment is still
-                # judged against a real path rather than against a guess.
-                with contextlib.suppress(OSError):
-                    current = candidate.resolve()
+            current = _yard_follow_cd(words, current)
             continue
 
         read_only = _yard_segment_is_read_only(segment)
@@ -4264,6 +4279,520 @@ def check_yard_write_guard(payload: dict) -> dict | None:
                         f"moment into one commit nobody reviewed. HELM records "
                         f"the data's history."
                     )
+    return None
+
+
+# ============================================================
+# Deleting a YARD that is not finished
+# ============================================================
+#
+# The sibling above asks whether a YARD is reaching OUT of itself. This one asks
+# the opposite question, and it is HELM's: is this command about to erase a
+# worktree whose work is not yet safe anywhere else?
+#
+# WHY IT EXISTS. On 2026-09-06, deleting a finished yard, the agent typed
+#
+#     git worktree remove <path> --force
+#
+# `--force` was not needed there and the tree was clean, so nothing was lost.
+# What it did was switch off the ONE check git has for this: the refusal to
+# remove a worktree carrying modified or untracked files. A command that can
+# erase unfinished work, running with the only objection disabled, and nothing
+# in the workspace would have said a word. The operator's instruction was to
+# make that impossible.
+#
+# THE HONEST BOUNDARY, and it is narrower than the word "impossible".
+# `_dispatch.py` is a PreToolUse hook: the harness calls it with one tool call
+# at a time, so it sees exactly what the AGENT asks for. It does not see inside
+# a process that call starts. A whole `pytest` run, a shell script, a Python
+# program that calls `shutil.rmtree` -- each of those is ONE Bash call, and
+# everything that happens inside it happens with this wall already behind it.
+# So this closes the agent, and it closes nothing else: not the test suite, not
+# a script, not a command the operator types in their own terminal. "Impossible"
+# here means impossible for the agent to do through its tools, which is what the
+# instruction was about, and claiming more would be the shape of defect this
+# repository spent ten days removing.
+#
+# A YARD is UNFINISHED when any one of three is true, and each is asked of the
+# TARGET's tree rather than of this one:
+#
+#   1. its working tree carries changes -- modified tracked files, or untracked
+#      files git does not ignore (`git status --porcelain` in THAT worktree);
+#   2. its HEAD holds commits that `main` cannot reach (`rev-list --count
+#      main..HEAD`, which answers for a detached HEAD as well as a branch);
+#   3. a process is standing in it that THIS COMMAND WOULD NOT CLOSE -- some
+#      pid's cwd is inside the directory, and it does not belong to the herdr
+#      workspace being removed.
+#
+# All three are checked and every unmet one is named, because "commit it" and
+# "it is still running" are different instructions and the operator gets the
+# one that applies.
+#
+# THE OWNERSHIP CLAUSE IN CONDITION 3, and it is a correction rather than a
+# refinement. The first version of this wall asked only "is anybody in it", and
+# the comment here promised that a finished yard "with nobody in it" passes in
+# silence. MEASURED 2026-09-06 against the live yard `w5M`: seven processes
+# stood in it -- the agent, three of its MCP servers, the pane's shell and two
+# children -- and that is the NORMAL state of a yard at the moment its work is
+# done. "Nobody in it" never arrives while the yard exists as a herdr workspace,
+# so the wall refused the last step of the documented cycle always, for
+# everyone. A wall like that is switched off within the week, which is the
+# failure this file names in its own temp-tree carve-out.
+#
+# The distinction that fixes it is what the COMMAND does, not what is running:
+#
+#   * `herdr worktree remove --workspace <ID>` closes that workspace's session
+#     as part of the removal. A process belonging to <ID> is therefore part of
+#     the operation, not a casualty of it.
+#   * `rm -rf` and `git worktree remove` close nothing. Every process standing
+#     inside is left with a deleted working directory, so condition 3 applies to
+#     all of them, unchanged.
+#
+# Ownership is MEASURED, not assumed. `HERDR_WORKSPACE_ID` is exported into the
+# pane and inherited by the agent, its MCP servers, its shells and their
+# children: 2026-09-06, all seven processes in `w5M` carried `w5M`, every
+# environment was readable, and a process started with the variable stripped
+# read back as absent. A process whose environment cannot be read, or which
+# carries no workspace or a different one, is FOREIGN and still refuses.
+#
+# What that clause does not close, stated rather than left to be found: an
+# environment variable is a claim the process makes about itself, so anything
+# able to set `HERDR_WORKSPACE_ID` can present itself as owned. It buys nothing
+# for an adversary here -- the exemption reaches condition 3 only, conditions 1
+# and 2 are untouched, and the command it applies to really does close that
+# workspace -- but it is a claim rather than a proof and is written as one.
+#
+# WHAT IT DOES NOT DO. It never removes, commits, merges or kills anything. A
+# yard whose tree is clean, whose commits `main` can reach, and in which nothing
+# stands that the command would not close, passes in silence: that is the
+# ordinary end of every task, and a guard charging a sentence for the normal
+# path gets removed within the week.
+
+# A worktree under one of these is a throwaway: `tmp_path`, `tmp_path_factory`
+# and every `mkdtemp` in the suite land here, and the suite creates and destroys
+# real worktrees of this repository. LITERAL, and read from no environment
+# variable on purpose: `tempfile.gettempdir()` honours `TMPDIR`, so a guard
+# resting on it carries its own disarm switch (`TMPDIR=/ rm -rf <yard>`).
+# S108 / B108: these are read as PREFIXES to compare a deletion target against.
+# Nothing is created, opened or written at either path, which is what that rule
+# is about. Silenced rather than rewritten because the literalness is the point:
+# `tempfile.gettempdir()` honours `TMPDIR`, so deriving them would hand this
+# guard its own disarm switch, per the paragraph above.
+#
+# TWO suffixes, because two gates read this file and each reads only its own
+# spelling: ruff answers to the S-code one and never sees the other, bandit
+# answers to the B-code one and never sees the first. Either alone leaves the
+# line silenced for one gate and failing the other, which is what happened here
+# on 2026-09-06: ruff and lint-ratchet went green while bandit refused the
+# commit twice over this single line. The order and spacing below are the
+# repository's existing shape for exactly this pair of codes
+# (`scripts/utils/sandbox.py`, its `--tmpfs` argument), which ten other lines
+# also carry, so neither tool swallows the other's suffix.
+#
+# The prose above deliberately spells neither directive out. Both tools scan
+# comment TEXT, so a sentence quoting them is read as a directive: measured the
+# same day, an explanation that named them produced five bandit "Test in
+# comment" warnings and two ruff "Invalid directive" warnings, from a comment
+# whose whole job was to explain why the real directives are there.
+_YARD_DELETION_TEMP_ROOTS = (Path("/tmp"), Path("/var/tmp"))  # noqa: S108  # nosec B108
+
+# Cheap first question, asked before anything resolves a path or reads a
+# registry. Every deletion form below spells one of these two words, and almost
+# no other command does.
+_YARD_DELETION_HINT_RE = re.compile(r"(?:^|[^\w-])rm(?:$|[^\w-])|worktree")
+
+# `rm -r`, `rm -rf`, `rm -fr`, `rm --recursive`. A bare `rm` cannot remove a
+# directory, so it cannot remove a checkout.
+_YARD_RM_RECURSIVE_RE = re.compile(r"^-[a-zA-Z]*[rR]")
+
+
+def _yard_deletion_operands(words: list[str]) -> list[str]:
+    """The non-flag words of a link, unquoted, `--` and what follows included."""
+    out = []
+    seen_separator = False
+    for word in words[1:]:
+        if word == "--" and not seen_separator:
+            seen_separator = True
+            continue
+        if word.startswith("-") and not seen_separator:
+            continue
+        out.append(word.strip("'\""))
+    return out
+
+
+def _yard_herdr_session_files() -> list[Path]:
+    """Every file that could hold herdr's workspace-id → checkout-path map.
+
+    BOTH candidates, never the first that exists. `HERDR_SOCKET_PATH` is an
+    environment variable, so a resolver trusting it alone would take its answer
+    from a file the running process can choose; the fixed `~/.config/herdr`
+    path is read as well and the union of what they say is used, so pointing
+    the variable at a doctored file can only ADD a checkout to guard.
+    """
+    candidates: list[Path] = []
+    socket = os.environ.get("HERDR_SOCKET_PATH")
+    if socket:
+        with contextlib.suppress(OSError, RuntimeError):
+            candidates.append(Path(socket).expanduser().parent / "session.json")
+    with contextlib.suppress(RuntimeError):
+        candidates.append(Path.home() / ".config" / "herdr" / "session.json")
+    seen: list[Path] = []
+    for candidate in candidates:
+        if candidate not in seen:
+            seen.append(candidate)
+    return seen
+
+
+def _yard_herdr_checkouts(workspace_id: str) -> list[Path]:
+    """Every checkout path herdr records for `workspace_id`.
+
+    `herdr worktree remove --workspace <ID>` names no path at all, so the path
+    has to be resolved before the command can be judged. It IS resolvable, and
+    cheaply: herdr keeps its session state as JSON, and each workspace record
+    carries `worktree_space.checkout_path`. MEASURED 2026-09-06 against the live
+    file, 3901 bytes and three workspaces. That is one small read and a JSON
+    parse, no subprocess and no socket, so this form is covered rather than
+    waved through.
+
+    An empty result means "could not establish", never "nothing to protect";
+    the caller refuses on it.
+    """
+    found: list[Path] = []
+    for path in _yard_herdr_session_files():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            # Logged rather than swallowed. An absent file is the ordinary state
+            # on a machine with no herdr, and the caller refuses anyway when
+            # nothing resolves, so this never fails open.
+            print(f"[_dispatch:yard-deletion] {path} unreadable "
+                  f"({type(exc).__name__}: {exc})", file=sys.stderr)
+            continue
+        if not isinstance(data, dict):
+            continue
+        for workspace in data.get("workspaces") or []:
+            if not isinstance(workspace, dict):
+                continue
+            if workspace.get("id") != workspace_id:
+                continue
+            space = workspace.get("worktree_space")
+            checkout = space.get("checkout_path") if isinstance(space, dict) else None
+            if not checkout:
+                continue
+            candidate = Path(checkout)
+            with contextlib.suppress(OSError):
+                candidate = candidate.resolve()
+            if candidate not in found:
+                found.append(candidate)
+    return found
+
+
+def _yard_herdr_workspace_for(checkout: Path) -> str | None:
+    """The herdr workspace id whose checkout is `checkout`, or None.
+
+    The reverse of `_yard_herdr_checkouts`, and it exists only to make a refusal
+    actionable: when the one thing standing in a yard is its own session,
+    the operator needs the spelling that CLOSES it rather than a wall. Read on
+    the refusal path only, so it costs nothing on a command that passes.
+    """
+    for path in _yard_herdr_session_files():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"[_dispatch:yard-deletion] {path} unreadable "
+                  f"({type(exc).__name__}: {exc})", file=sys.stderr)
+            continue
+        if not isinstance(data, dict):
+            continue
+        for workspace in data.get("workspaces") or []:
+            if not isinstance(workspace, dict):
+                continue
+            space = workspace.get("worktree_space")
+            recorded = space.get("checkout_path") if isinstance(space, dict) else None
+            if not recorded:
+                continue
+            candidate = Path(recorded)
+            with contextlib.suppress(OSError):
+                candidate = candidate.resolve()
+            if candidate == checkout and workspace.get("id"):
+                return str(workspace["id"])
+    return None
+
+
+def _yard_deletion_requests(
+        command: str, cwd: Path) -> list[tuple[str, list[Path], str | None]]:
+    """Every link that would destroy a checkout: (form, targets, closes).
+
+    An EMPTY target list means the form was recognised but what it points at
+    could not be established, which the caller refuses on. Forms, not one
+    string: the incident was a `git worktree remove --force`, and matching that
+    literal would leave `rm -rf` and the herdr spelling open.
+
+    `closes` is the herdr workspace id this command SHUTS DOWN as part of the
+    removal, and it is None for every form that shuts nothing down. It is the
+    third element rather than something the caller re-derives from `form`,
+    because "does this close the session standing there" is a property of the
+    command and belongs where the command is read.
+    """
+    requests: list[tuple[str, list[Path], str | None]] = []
+    current = cwd
+
+    def _resolve(spelled: str) -> Path:
+        candidate = Path(spelled)
+        candidate = candidate if candidate.is_absolute() else current / candidate
+        with contextlib.suppress(OSError):
+            candidate = candidate.resolve()
+        return candidate
+
+    for segment in _yard_segments(command):
+        words = _yard_words(segment)
+        if not words:
+            continue
+        verb = words[0].rsplit("/", 1)[-1]
+
+        if verb == "cd":
+            current = _yard_follow_cd(words, current)
+            continue
+
+        if verb == "rm":
+            recursive = any(word == "--recursive" or _YARD_RM_RECURSIVE_RE.match(word)
+                            for word in words[1:])
+            if not recursive:
+                continue          # a bare `rm` cannot remove a directory
+            targets = [_resolve(operand)
+                       for operand in _yard_deletion_operands(words)]
+            if targets:
+                requests.append(("rm", targets, None))
+            continue
+
+        if verb == "git":
+            if _yard_git_subcommand(words) != "worktree":
+                continue
+            operands = _yard_git_operands("worktree", words)
+            if operands[:1] != ["remove"]:
+                continue
+            requests.append(("git worktree remove",
+                             [_resolve(operand) for operand in operands[1:]],
+                             None))
+            continue
+
+        if verb == "herdr":
+            operands = _yard_deletion_operands(words)
+            if operands[:2] != ["worktree", "remove"]:
+                continue
+            workspace_id = ""
+            for index, word in enumerate(words):
+                if word.startswith("--workspace="):
+                    workspace_id = word.split("=", 1)[1].strip("'\"")
+                elif word == "--workspace" and index + 1 < len(words):
+                    workspace_id = words[index + 1].strip("'\"")
+            targets = _yard_herdr_checkouts(workspace_id) if workspace_id else []
+            requests.append(("herdr worktree remove", targets,
+                             workspace_id or None))
+
+    return requests
+
+
+def _yard_guarded_checkouts() -> list[Path]:
+    """Every worktree of THIS repository that a deletion has to be judged against.
+
+    Derived from the current checkout, through `worktree_roots`, which reads the
+    registry git keeps in the main clone and drops both HELM and registrations
+    whose directory is gone. Never a constant, never `${CLAUDE_PROJECT_DIR}`:
+    this file's own location is the only input.
+
+    Throwaways are dropped here rather than in the caller, because the suite
+    creates and destroys real worktrees of this repository under `/tmp` and a
+    guard that fights its own test suite is a guard somebody switches off.
+    """
+    from scripts.utils.clone_guard import worktree_roots
+    return [root for root in worktree_roots(WORKSPACE)
+            if not any(_yard_is_under(root, temp)
+                       for temp in _YARD_DELETION_TEMP_ROOTS)]
+
+
+def _yard_git_answer(root: Path, args: list[str]) -> tuple[bool, str]:
+    """Run one read-only git command in `root`. (ok, output-or-error)."""
+    import subprocess
+    try:
+        # `errors="replace"`: a filename in that worktree can hold bytes that are
+        # not UTF-8, and `text=True` alone raises UnicodeDecodeError, which is a
+        # ValueError and so is caught by neither handler below. That would end
+        # the hook rather than the command, which is a wall going down over one
+        # byte of a child's output.
+        completed = subprocess.run(
+            ["git", "-C", str(root), *args],
+            capture_output=True, text=True, errors="replace", timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    if completed.returncode != 0:
+        return False, (completed.stderr or completed.stdout).strip()
+    return True, completed.stdout
+
+
+#: The variable herdr exports into a pane, inherited by the agent, its MCP
+#: servers, its shells and their children. See the ownership clause above.
+_HERDR_WORKSPACE_ENV = "HERDR_WORKSPACE_ID"
+
+
+def _yard_live_processes(root: Path,
+                         owned_by: str | None = None) -> list[str] | None:
+    """`pid (name)` per process standing inside `root`, or None if `/proc` failed.
+
+    `owned_by` is the herdr workspace id the COMMAND is about to close, and only
+    the herdr form has one. Processes belonging to it are dropped, because the
+    removal closes them; everything else is reported, including a process whose
+    environment could not be read, which cannot be shown to belong to anything.
+
+    The question is asked of `scripts/utils/proc_cwd.processes_in`, which owns
+    it for the three callers that want it; the import is deferred because this
+    hook runs on every tool call and only ever reaches here on a deletion.
+
+    None is NOT an empty list. "Could not look" and "nobody is there" send the
+    operator opposite ways, and the caller refuses on the first.
+    """
+    from scripts.utils.proc_cwd import processes_in
+    found = processes_in(root, nested=True,
+                         env_names=(_HERDR_WORKSPACE_ENV,) if owned_by else ())
+    if found is None:
+        return None
+    if owned_by:
+        found = [p for p in found
+                 if p.env is None
+                 or p.env.get(_HERDR_WORKSPACE_ENV) != owned_by]
+    return [f"{p.pid} ({p.comm})" if p.comm else str(p.pid) for p in found]
+
+
+def _yard_unfinished(root: Path, owned_by: str | None = None) -> list[str]:
+    """Every reason `root` is not finished. Empty means it is safe to delete.
+
+    `owned_by` is passed through to condition 3 only. Conditions 1 and 2 do not
+    know which command is asking and must not: the incident this wall was
+    written for is a `--force` over uncommitted work, and no spelling of the
+    removal makes that survivable.
+    """
+    unmet: list[str] = []
+
+    ok, answer = _yard_git_answer(root, ["status", "--porcelain"])
+    if not ok:
+        unmet.append(f"its working tree could not be read ({answer[:200]}), so "
+                     f"whether it holds uncommitted work is UNKNOWN, not no")
+    elif answer.strip():
+        changed = len([line for line in answer.splitlines() if line.strip()])
+        unmet.append(f"{changed} uncommitted change(s) in its working tree "
+                     f"(modified tracked files, or untracked files git does not "
+                     f"ignore)")
+
+    ok, answer = _yard_git_answer(root, ["rev-list", "--count", "main..HEAD"])
+    if not ok:
+        unmet.append(f"its commits could not be compared against `main` "
+                     f"({answer[:200]}), so whether the branch is merged is "
+                     f"UNKNOWN, not yes")
+    else:
+        try:
+            ahead = int(answer.strip() or "0")
+        except ValueError:
+            ahead = -1
+        if ahead < 0:
+            unmet.append(f"`rev-list --count main..HEAD` answered {answer.strip()!r}, "
+                         f"which is not a count, so whether the branch is merged "
+                         f"is UNKNOWN")
+        elif ahead:
+            unmet.append(f"{ahead} commit(s) on its HEAD that `main` cannot reach")
+
+    live = _yard_live_processes(root, owned_by)
+    if live is None:
+        unmet.append("`/proc` could not be enumerated, so whether a session is "
+                     "standing in it is UNKNOWN, not no")
+    elif live:
+        shown = ", ".join(live[:6])
+        if len(live) > 6:
+            shown += f", and {len(live) - 6} more"
+        closes = (" that this command would not close" if owned_by else "")
+        unmet.append(f"{len(live)} process(es) standing in it{closes}: {shown}")
+
+    return unmet
+
+
+def check_yard_deletion_guard(payload: dict) -> dict | None:
+    if payload.get("tool_name") != "Bash":
+        return None
+    command = (payload.get("tool_input", {}) or {}).get("command", "") or ""
+    if not command or not _YARD_DELETION_HINT_RE.search(command):
+        return None
+
+    cwd = Path(payload.get("cwd") or WORKSPACE)
+    requests = _yard_deletion_requests(command, cwd)
+    if not requests:
+        return None
+
+    try:
+        guarded = _yard_guarded_checkouts()
+    except Exception as exc:  # noqa: BLE001 - resolving is what this rests on
+        return _yard_deny(
+            f"YARD deletion guard: this command removes a checkout, and the "
+            f"worktrees of this repository could not be enumerated "
+            f"({type(exc).__name__}: {exc}), so what it would erase cannot be "
+            f"established. Refusing in the safe direction."
+        )
+
+    for form, targets, closes in requests:
+        if not targets:
+            return _yard_deny(
+                f"YARD deletion guard — intentional policy block, not an error. "
+                f"`{form}` names no checkout this hook could resolve, so whether "
+                f"it would erase unfinished work cannot be established.\n\n"
+                f"Name the worktree by its path, or name the workspace id that "
+                f"herdr knows, and run it again."
+            )
+        for target in targets:
+            # `root == target` is the yard itself; `root under target` is a
+            # command aimed at a directory that CONTAINS yards, which is how
+            # `rm -rf` of the worktree container erases several without ever
+            # spelling one of their names.
+            for root in guarded:
+                if root != target and not _yard_is_under(root, target):
+                    continue
+                unmet = _yard_unfinished(root, closes)
+                if not unmet:
+                    continue
+                reasons = "\n".join(f"  * {reason}" for reason in unmet)
+                aimed = ("" if root == target
+                         else f"\nAimed at {target}, which contains it.")
+                # A command that closes nothing, refused over processes alone,
+                # is the case where the operator is holding the wrong spelling
+                # rather than unfinished work. Name the right one, with the id.
+                # Only then: the lookup is a file read, and a command that
+                # passes must not pay for it.
+                hint = ""
+                if closes is None and all("process(es)" in r for r in unmet):
+                    workspace = _yard_herdr_workspace_for(root)
+                    if workspace:
+                        hint = (
+                            f"\n\nThose processes are this yard's own session, "
+                            f"and `{form}` does not close it: it would leave "
+                            f"every one of them with a deleted working "
+                            f"directory. `herdr worktree remove --workspace "
+                            f"{workspace}` closes the session as part of the "
+                            f"removal, and is the last step of the cycle."
+                        )
+                return _yard_deny(
+                    f"YARD deletion guard — intentional policy block, not an "
+                    f"error. This `{form}` would erase a worktree that is NOT "
+                    f"finished:\n\n  {root}{aimed}\n\n"
+                    f"What is unfinished:\n{reasons}{hint}\n\n"
+                    f"A yard is finished when all three hold: its tree is "
+                    f"clean, its commits are reachable from `main`, and nothing "
+                    f"stands in it that this command would not close. Until "
+                    f"then, deleting it is the one action nothing can undo — "
+                    f"the branch is unmerged and the working tree exists in "
+                    f"exactly one place.\n\n"
+                    f"Commit the work in that yard and have HELM merge the "
+                    f"branch. Then this command passes without a word. "
+                    f"`--force` does not lift this: it switches off git's own "
+                    f"version of the first check, which is what made this wall "
+                    f"necessary."
+                )
     return None
 
 
@@ -4393,6 +4922,7 @@ CHECKS = [
     check_protect_corporate,
     check_protect_docs,
     check_yard_write_guard,
+    check_yard_deletion_guard,
     check_cwd_anchor,
     check_slow_shell,
     check_rate_limit,

@@ -248,6 +248,84 @@ nothing about authorship. That is why the authorisation above names HELM rather
 than "a neighbouring session": no machinery can tell the two apart, so the rule
 has to, and it is written in `CLAUDE.md` where the committing session reads it.
 
+### Deleting a yard, which is the one step nothing can undo
+
+The last step of the cycle destroys the only copy of something. A task branch is
+unmerged while the task is running, and its working tree exists in exactly one
+place, so a worktree removed early takes both with it. git has one objection to
+this, its refusal to remove a worktree holding modified or untracked files, and
+`--force` switches that objection off. On 2026-09-06 a finished yard was removed
+with `git worktree remove <path> --force`. Nothing was lost, because the tree
+was clean; the command that was typed would not have known the difference.
+
+`check_yard_deletion_guard` in `.claude/hooks/_dispatch.py` refuses to delete a
+worktree of this repository that is not finished. Finished means all three of:
+a clean working tree (`git status --porcelain` in THAT tree), no commit on its
+HEAD that `main` cannot reach (`rev-list --count main..HEAD`, which answers for
+a detached HEAD too), and nothing standing in it that the command would not
+close (`/proc/<pid>/cwd`, 0.8 ms over 76 processes). It recognises forms rather
+than one string:
+`git worktree remove` with and without `--force`, `rm -r` and `rm -rf` by any
+spelling including a directory that merely contains yards, and
+`herdr worktree remove --workspace <ID>`, whose path is resolved from herdr's
+own session record before the command is judged. Every unmet condition is named,
+because "commit it", "merge it" and "use the spelling that closes the session"
+are three different instructions.
+
+The third condition carries an ownership clause, and it is a correction rather
+than a nicety. Asked as "is anybody in it", the wall refused the last step of
+the cycle always: MEASURED 2026-09-06 against the live yard `w5M`, seven
+processes stood in it, the agent plus three MCP servers, the pane's shell and
+two children, and that is a yard's normal state at the moment its work is done.
+So the question is what the COMMAND does. `herdr worktree remove --workspace
+<ID>` closes that workspace's session as part of the removal, so a process
+belonging to `<ID>` is part of the operation; `rm -rf` and `git worktree remove`
+close nothing and leave every process inside with a deleted working directory,
+so for them the condition is unchanged. Ownership is read from
+`HERDR_WORKSPACE_ID`, which herdr exports into the pane and every descendant
+inherits: all seven processes carried it, every environment was readable, and a
+process started with the variable stripped read back as absent. A process whose
+environment cannot be read, or which carries a different workspace or none, is
+foreign and still refuses. The clause reaches condition 3 only, so `--force`
+over uncommitted work, the incident that prompted the wall, is untouched.
+
+Where a refusal is caused by the yard's own session alone, it names the herdr
+spelling with the workspace id in it, because at that point the operator is
+holding the wrong command rather than unfinished work.
+
+Two bounds are stated rather than left to be found. A PreToolUse hook sees tool
+calls, so this closes what the AGENT can do and closes nothing inside a process
+one of its calls starts: a whole pytest run or a shell script is one Bash call.
+And worktrees under `/tmp` and `/var/tmp` are exempt, because the suite creates
+and destroys real worktrees of this repository there; the exempt roots are
+literals and are read from no environment variable, since a guard resting on
+`TMPDIR` would carry its own disarm switch.
+
+### Whether a session in a yard is the one that was provisioned
+
+Two checks in `.claude/hooks/session-start.py` answer questions the bootstrap
+cannot answer for itself, and both were written after being measured wrong.
+
+`check_yard_marker` fires when the checkout is a worktree and
+`HEADING_OS_YARD` is absent from the session's environment. The bootstrap
+exports it into the agent PROCESS, which is what the yard-side guards read.
+MEASURED 2026-09-06: an agent started by hand from an older instruction won the
+race against the bootstrap's own start by 0.8 s, so the bootstrap's command
+arrived at a live agent and was consumed as a prompt. The status file said
+`ok/11` honestly, and the session ran with the marker down. The check asks
+whether `.git` is a FILE, never whether the marker is set, because a check that
+read the marker to decide whether the marker matters would prove itself.
+
+`check_yards_without_a_session` names the OTHER worktrees with no agent in them.
+Its signal moved on 2026-09-06 from a transcript on disk to a live process with
+`comm == "claude"` whose cwd IS the checkout. A transcript is a record, so it
+answers about the past in both directions: a correctly provisioned yard writes
+none until it is spoken to, and a yard whose agent has exited leaves one behind.
+The transcript survives only as the fallback for an unreadable `/proc`, and the
+report says so when it is used. `scripts/utils/proc_cwd.py` owns the question for
+the three callers that ask it, and returns `None` rather than an empty list when
+it could not look.
+
 ### Where a fix is made, and why size is the wrong question
 
 Until 2026-09-05 the rule sent every engine change to a YARD, "typos and

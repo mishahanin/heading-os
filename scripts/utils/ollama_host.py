@@ -226,6 +226,53 @@ def host_candidates(preferred) -> list[str]:
     return out
 
 
+def main_worktree_root(root):
+    # No return annotation: this module imports `Path` inside each function
+    # rather than at module scope, and naming it here is an undefined name
+    # (ruff F821) even inside a string annotation.
+    """The main checkout behind a LINKED WORKTREE at `root`, else None.
+
+    A linked worktree's `.git` is a FILE reading `gitdir: <common>/worktrees/<n>`,
+    where `<common>` is the main checkout's `.git` directory. A normal clone's
+    `.git` is a directory, and this returns None for it, so nothing about the
+    ordinary case changes.
+
+    Read from the checkout's own `.git`, never from a constant, an environment
+    variable, or `git rev-parse`: `CLAUDE.md` requires anything resolving a tree
+    to derive it from the current checkout, and a subprocess here would run on
+    every embed call.
+    """
+    from pathlib import Path
+
+    root = Path(root)
+    dotgit = root / ".git"
+    try:
+        if not dotgit.is_file():          # a directory, or absent: ordinary clone
+            return None
+        text = dotgit.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+    prefix = "gitdir:"
+    line = next((ln.strip() for ln in text.splitlines()
+                 if ln.strip().startswith(prefix)), "")
+    if not line:
+        return None
+
+    gitdir = Path(line[len(prefix):].strip())
+    if not gitdir.is_absolute():
+        gitdir = (root / gitdir).resolve()
+
+    # `<common>/worktrees/<name>` -> `<common>` -> the checkout holding it.
+    if gitdir.parent.name != "worktrees":
+        return None
+    common = gitdir.parent.parent
+    if common.name != ".git":
+        return None
+    main = common.parent
+    return main if main.is_dir() and main != root else None
+
+
 def machine_hosts(role: str, *, root=None) -> list[str]:
     """This machine's preference for `role`, as raw entries. [] when unset.
 
@@ -234,6 +281,11 @@ def machine_hosts(role: str, *, root=None) -> list[str]:
     CI, and for this laptop before its Windows side is running. Returns the
     entries UNRESOLVED so the caller picks its own resolver - refusing for
     embedding, degrading for generation.
+
+    One exception, and it is not a widening of that default: when `root` is a
+    LINKED WORKTREE and holds no file of its own, the main checkout's file is
+    read instead. A worktree is the same machine, so "absent here" means "not
+    visible from here", not "this machine pins nothing".
 
     Args:
         role: one of `MACHINE_HOST_ROLES`.
@@ -259,6 +311,25 @@ def machine_hosts(role: str, *, root=None) -> list[str]:
         root = get_workspace_root()
 
     path = Path(root) / MACHINE_HOSTS_FILE
+    if not path.exists():
+        # A linked worktree is the SAME machine as the checkout it was cut from,
+        # and this file is a fact about the machine. The pin is gitignored for a
+        # good reason (every address in it names one laptop), but that makes it
+        # absent in every worktree, where all engine work happens.
+        #
+        # MEASURED 2026-09-06 in `yard-memory-recalibration`, before this branch
+        # existed: `memory-index.py query` returned `{"hits": [], "gap": true,
+        # "embed_unavailable": {... cannot reach embedder at
+        # http://localhost:11434 ...}}`, because an absent file resolved to the
+        # unprobed local default and the local daemon was removed 2026-08-23.
+        # Memory search was dead in every yard and said nothing about it.
+        #
+        # Absence in an ordinary clone still means "this machine pins nothing",
+        # which is the documented, tested default: `main_worktree_root` returns
+        # None there and this branch changes nothing.
+        main = main_worktree_root(root)
+        if main is not None:
+            path = main / MACHINE_HOSTS_FILE
     try:
         with open(path, encoding="utf-8") as fh:
             payload = yamlio.safe_load(fh) or {}

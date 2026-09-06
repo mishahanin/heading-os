@@ -49,6 +49,24 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts/herdr-brief.py"
 
+# `herdr-brief.py` calls `require_main_clone` right after `parse_args`, because
+# sending a brief is HELM's job and a yard must not do it. Every test below
+# that SPAWNS the script therefore exits 2 with the guard's refusal in any
+# worktree, and the whole file went red on a yard's own full-suite run. MEASURED 2026-09-06 in
+# `yard-memory-recalibration`: 5 failed, 4 passed, against 9 passed in HELM.
+#
+# The condition is asked of the SAME guard the script uses, not of a path shape:
+# a hand-rolled "am I in .yard/" test would drift from what actually refuses.
+# The refusal itself is asserted below rather than merely skipped around, so a
+# yard's run still measures something instead of quietly measuring nothing.
+from scripts.utils.clone_guard import is_main_clone  # noqa: E402
+
+IN_MAIN_CLONE = is_main_clone(ROOT)
+helm_only = pytest.mark.skipif(
+    not IN_MAIN_CLONE,
+    reason="herdr-brief.py refuses to run outside HELM (scripts/utils/clone_guard.py); "
+           "the refusal is asserted by test_a_worktree_cannot_send_a_brief_at_all")
+
 
 @pytest.fixture(scope="module")
 def brief():
@@ -139,6 +157,7 @@ def _run(bindir: Path, projects: Path, text: str = "BODY"):
         capture_output=True, text=True, env=env, cwd=str(ROOT), timeout=180)
 
 
+@helm_only
 def test_a_pane_whose_session_never_started_is_refused(tmp_path):
     """The direction that would have stopped both misdeliveries."""
     checkout = tmp_path / "yard-empty"
@@ -175,6 +194,7 @@ def _prepared(tmp_path: Path):
     return checkout, projects, target
 
 
+@helm_only
 def test_delivery_that_never_arrives_fails_loudly(tmp_path):
     """herdr says Sent, the transcript never grows, the script must not agree."""
     checkout, projects, _ = _prepared(tmp_path)
@@ -189,6 +209,7 @@ def test_delivery_that_never_arrives_fails_loudly(tmp_path):
     assert "DELIVERY NOT VERIFIED" in result.stderr
 
 
+@helm_only
 def test_delivery_that_lands_in_another_yard_names_that_yard(tmp_path):
     """The half that turned a silent misdelivery into a named one.
 
@@ -209,6 +230,7 @@ def test_delivery_that_lands_in_another_yard_names_that_yard(tmp_path):
         f"stderr={result.stderr}")
 
 
+@helm_only
 def test_a_delivery_that_does_arrive_succeeds(tmp_path):
     """The other direction. A guard that refuses everything is not a guard."""
     checkout, projects, target = _prepared(tmp_path)
@@ -226,6 +248,7 @@ def test_a_delivery_that_does_arrive_succeeds(tmp_path):
 # The id must be unique per send, or verification proves nothing
 # ============================================================
 
+@helm_only
 def test_each_brief_carries_a_fresh_id(tmp_path, brief):
     """Two sends of the SAME text must not share an id.
 
@@ -245,6 +268,24 @@ def test_each_brief_carries_a_fresh_id(tmp_path, brief):
     assert len(seen) == 2, (
         f"both sends carried the same id {seen}; verification would then pass "
         f"on a transcript that only holds the earlier brief")
+
+
+@pytest.mark.skipif(IN_MAIN_CLONE, reason="this checkout IS the main clone")
+def test_a_worktree_cannot_send_a_brief_at_all(tmp_path):
+    """The other half of the skip above: in a yard the script must REFUSE.
+
+    Without this, a yard's run of this file would assert nothing at all, and a
+    file that measures nothing is indistinguishable from a file that passes.
+    """
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "w99:p1", "BODY",
+         "--projects-root", str(tmp_path)],
+        capture_output=True, text=True, cwd=str(ROOT), timeout=180)
+
+    assert result.returncode == 2, (
+        f"a YARD was allowed past the clone guard.\n"
+        f"stdout={result.stdout}\nstderr={result.stderr}")
+    assert "HELM" in result.stderr
 
 
 def test_there_is_no_flag_to_skip_the_delivery_checks(brief):

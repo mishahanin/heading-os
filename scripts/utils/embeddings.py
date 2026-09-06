@@ -415,8 +415,8 @@ def _post_with_retry(url: str, payload: bytes, timeout: int, attempts: int = 3):
         except urllib.error.URLError as e:
             last_err = (
                 f"cannot reach embedder at {url}: {e.reason}. "
-                f"Is ollama running? (`ollama serve` / check the host in "
-                f"config/memory-index.yaml)"
+                f"Is ollama running? (`ollama serve` / check the machine pin in "
+                f"config/ollama-hosts.yaml)"
             )
         except (json.JSONDecodeError, UnicodeDecodeError, KeyError) as e:
             # `UnicodeDecodeError` is a `ValueError` and a SIBLING of

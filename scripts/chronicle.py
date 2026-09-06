@@ -854,6 +854,15 @@ def write_marker(newest_date: str) -> None:
 
 def cmd_build(args: argparse.Namespace) -> int:
     sessions_dir = args.sessions_dir or DEFAULT_SESSIONS_DIR
+    if sessions_dir is None:
+        # `DEFAULT_SESSIONS_DIR` is `Path | None` since 2026-09-06: the slug
+        # owner refuses off POSIX rather than guessing, and calibrate passes
+        # that refusal through. Unguarded, the `.is_dir()` below is an
+        # AttributeError traceback out of the nightly build, under a message
+        # that would have named a directory ("not found: None").
+        print(f"{RED}the transcript directory could not be resolved on this "
+              f"platform; pass --sessions-dir{RESET}", file=sys.stderr)
+        return 1
     if not sessions_dir.is_dir():
         print(f"{RED}sessions dir not found: {sessions_dir}{RESET}", file=sys.stderr)
         return 1

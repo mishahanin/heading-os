@@ -158,14 +158,15 @@ if [[ "${1:-}" == "--check" || "${1:-}" == "check" ]]; then
     exit 1
 fi
 
-# Honor PYTHON env override so callers can point at a venv interpreter. The
-# nightly runs pytest, which lives only in .venv; nightly-refresh.py calls
-# ensure_venv() and re-execs itself if handed a bare system interpreter, so a
-# plain python3 here is correct but the venv one saves a re-exec.
-PYTHON="${PYTHON:-$WORKSPACE/.venv/bin/python}"
-if [[ ! -x "$PYTHON" ]]; then
-    PYTHON="$(command -v python3 || command -v python || true)"
-fi
+# Interpreter for the unit's ExecStart=, resolved by the one owner:
+# explicit PYTHON wins, else the pinned .venv, else PATH. MEASURED 2026-09-06:
+# seven installed units ran on /usr/bin/python3, whose numpy and pyyaml are
+# luck rather than a contract, and everything they respawn through
+# sys.executable inherited it. Here it also saves a re-exec: the nightly runs
+# pytest, which lives only in .venv, and nightly-refresh.py calls ensure_venv()
+# to re-exec itself when handed a bare system interpreter.
+source "$(dirname "$0")/lib/resolve-python.sh"
+PYTHON="$(resolve_python "$WORKSPACE")"
 
 # Unit timezone: resolved through the workspace resolver rather than read from the
 # environment alone. HEADING_OS_TZ lives in the gitignored .env and is exported by

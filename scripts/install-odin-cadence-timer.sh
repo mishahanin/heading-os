@@ -36,9 +36,13 @@ require_main_clone
 # Workspace root = directory containing this script's parent (i.e. scripts/../).
 WORKSPACE="$(cd "$(dirname "$0")/.." && pwd)"
 
-# Honor PYTHON env override so callers can point at a venv interpreter:
-#   PYTHON=/path/to/.venv-linux/bin/python ./install-odin-cadence-timer.sh
-PYTHON="${PYTHON:-$(command -v python3 || command -v python || true)}"
+# Interpreter for the unit's ExecStart=, resolved by the one owner:
+# explicit PYTHON wins, else the pinned .venv, else PATH. MEASURED 2026-09-06:
+# seven installed units ran on /usr/bin/python3, whose numpy and pyyaml are
+# luck rather than a contract, and everything they respawn through
+# sys.executable inherited it.
+source "$(dirname "$0")/lib/resolve-python.sh"
+PYTHON="$(resolve_python "$WORKSPACE")"
 
 # Cadence timezone: externalized so no operating locale is baked into the engine.
 # Defaults to UTC; pin via HEADING_OS_TZ (e.g. America/New_York) for a local fire time.

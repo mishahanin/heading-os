@@ -109,6 +109,49 @@ def main_clone_path(path: Path | str | None = None) -> Path:
         "--git-common-dir", Path(path) if path is not None else Path.cwd()).parent
 
 
+def worktree_roots(path: Path | str | None = None) -> list[Path]:
+    """Every YARD registered against this repository's main clone, sorted.
+
+    Read from the registry git keeps for itself:
+    `<HELM>/.git/worktrees/<name>/gitdir` holds the path of that worktree's
+    `.git` FILE, so its parent is that worktree's root. A directory listing and
+    a handful of small reads, no subprocess, which is what lets a SessionStart
+    hook call it inside its time budget.
+
+    HELM itself is never in the list: it is the clone the registry belongs to,
+    not a worktree of it. A registration whose checkout has been deleted is
+    dropped, because a stale entry is not a YARD. Both of those are what make
+    the result answerable as "the YARDs that exist right now".
+
+    An unreadable registry returns the empty list rather than raising: git
+    creates `.git/worktrees` on the first `worktree add`, so its absence is the
+    ordinary state of a clone with no YARDs. Callers that need to distinguish
+    "no YARDs" from "could not look" ask `main_clone_path` first, which raises.
+    """
+    helm = main_clone_path(path)
+    roots: list[Path] = []
+    try:
+        entries = sorted((helm / ".git" / "worktrees").iterdir())
+    except OSError:
+        return roots
+    for entry in entries:
+        try:
+            pointer = (entry / "gitdir").read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not pointer:
+            continue
+        root = Path(pointer).parent
+        try:
+            root = root.resolve()
+        except OSError:
+            continue
+        if root == helm or root in roots or not root.is_dir():
+            continue
+        roots.append(root)
+    return roots
+
+
 def require_main_clone(script_path: str) -> None:
     """Exit 2 unless this process is running from the main clone.
 

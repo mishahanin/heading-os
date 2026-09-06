@@ -59,21 +59,13 @@ esac
 # Workspace root = directory containing this script's parent (i.e. scripts/../).
 WORKSPACE="$(cd "$(dirname "$0")/.." && pwd)"
 
-# Resolve the interpreter the unit's ExecStart will use, in priority order:
-#   1. An explicit PYTHON env override (caller points at a specific interpreter):
-#        PYTHON=/path/to/.venv-linux/bin/python ./install-daemon-service.sh bridge
-#   2. The workspace uv venv at <WORKSPACE>/.venv/bin/python, when it exists
-#      (the standard install target -- `uv sync` builds it).
-#   3. The first python3/python on PATH otherwise.
-# Modern Linux (Ubuntu 24.04+, Fedora 38+) enforces PEP 668 against system
-# Python, so the venv interpreter is preferred over a bare python3.
-if [[ -n "${PYTHON:-}" ]]; then
-    :  # explicit override wins
-elif [[ -x "$WORKSPACE/.venv/bin/python" ]]; then
-    PYTHON="$WORKSPACE/.venv/bin/python"
-else
-    PYTHON="$(command -v python3 || command -v python || true)"
-fi
+# Interpreter for the unit's ExecStart=, resolved by the one owner:
+# explicit PYTHON wins, else the pinned .venv, else PATH. MEASURED 2026-09-06:
+# seven installed units ran on /usr/bin/python3, whose numpy and pyyaml are
+# luck rather than a contract, and everything they respawn through
+# sys.executable inherited it.
+source "$(dirname "$0")/lib/resolve-python.sh"
+PYTHON="$(resolve_python "$WORKSPACE")"
 
 TEMPLATE="$WORKSPACE/scripts/templates/systemd/$UNIT.service"
 DEST_DIR="$HOME/.config/systemd/user"

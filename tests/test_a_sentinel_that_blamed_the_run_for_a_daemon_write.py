@@ -139,10 +139,21 @@ def test_the_baseline_is_a_committed_measured_number():
     data = json.loads(BASELINE_FILE.read_text(encoding="utf-8"))
     assert isinstance(data["reachable_children"], int)
     assert data["reachable_children"] >= 0
-    # Re-frozen 2026-09-04, DOWNWARD, from 9659 to 6100. A date pinned to a
-    # literal is what forces whoever moves the number to come here and say so,
-    # which is the point; it is not a claim that the number cannot change.
-    assert data["measured"] == "2026-09-04"
+    # A date pinned to a literal is what forces whoever moves the number to come
+    # here and say so, which is the point; it is not a claim that the number
+    # cannot change. Two moves are on the record:
+    #
+    #   2026-09-04  DOWNWARD, 9659 -> 6100, re-frozen after the venv pin.
+    #   2026-09-06  UPWARD, 6100 -> 6930, and `reachable_tests` 2715 added.
+    #
+    # The second is not a ratchet being relaxed. 6100 was computed from runs
+    # that each silently lost one to three xdist workers to an unencodable
+    # surrogate on the execnet wire, so it sat BELOW the honest figure by
+    # construction; the fix (4e535b1) is what made the true number visible.
+    # Six HELM runs then gave 6921/2713 five times and 6925/2714 once, the
+    # outlier being the only run that overlapped a worktree writing into the
+    # shared overlay.
+    assert data["measured"] == "2026-09-06"
 
 
 def test_a_missing_or_corrupt_baseline_fails_strict(tmp_path, monkeypatch):

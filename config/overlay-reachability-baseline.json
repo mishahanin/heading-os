@@ -1,12 +1,18 @@
 {
-  "reachable_children": 6100,
-  "measured": "2026-09-04",
+  "reachable_children": 6930,
+  "reachable_tests": 2715,
+  "measured": "2026-09-06",
   "shape": "pytest -n auto -m \"not acceptance\", the shape the suite is actually run in",
+  "measured_in": "HELM, after 0f348c2. Three runs at starting loads 0.11, 12.50 and 3.14.",
   "also_measured": {
-    "yard_after_the_pin": [4716, 4857, 4855, 4920],
-    "yard_before_the_pin": [9119, 9173, 8904],
-    "helm_before_the_pin": 10069,
-    "single_process_2026_09_03": 9460
+    "helm_2026_09_06_children": [6921, 6920, 6921, 6925, 6921, 6921],
+    "helm_2026_09_06_tests": [2713, 2713, 2713, 2714, 2713, 2713],
+    "the_fourth_run": "6925/2714, the only run of six that differed, and the only one that overlapped a YARD writing into the shared data overlay. Cost of one concurrent writer, measured once: +4 children, +1 test.",
+    "yard_2026_09_06_children": [6814, 6814, 6814],
+    "yard_2026_09_06_tests": [2680, 2680, 2680],
+    "helm_before_the_wire_fix": [6276, 6115, 6265, 6174, 6361, 6209, 6010, 6370],
+    "yard_before_the_wire_fix_children": "5537-6110 over ten runs",
+    "yard_before_the_wire_fix_tests": "2156-2454 over ten runs"
   },
-  "note": "Shrink-only. RUN-TO-RUN VARIANCE IS NOW ESTABLISHED, which the previous note recorded as the open question: two same-shape runs of one tree gave 9119 and 9173, a spread of 54 (0.6%), so the observed HELM growth 9659 -> 9815 -> 9861 -> 10069 is real growth and not noise. THE COUNT IS CLONE-DEPENDENT: 50 tests skip in a worktree (MAIN_CLONE_SKIP, 'no data overlay on this clone'), so this YARD measures about 900 below HELM on the same commit. 6100 is DERIVED, not measured in one place: 4920 (highest of four post-pin YARD runs) + 896 (the HELM-minus-YARD gap measured before the pin) + 284 headroom. The gap component is carried over from a pre-pin measurement and is the weakest term. RE-MEASURE IN HELM after this branch merges and ratchet down to what it reports; do not leave 6100 standing as if it had been measured there. If this gate flaps, that is still the reason and the fix is still to measure it, not to raise the number: the report now names the top spawning tests with their commands, so there is something to act on."
+  "note": "Shrink-only, and BOTH numbers are now measured in HELM rather than derived. THE OLD 6100 WAS NOT MERELY STALE: it was computed from runs that each silently lost one to three xdist workers, so it sat below the honest figure by construction. An unencodable surrogate escape in a sample spawn killed `workerfinished`, the whole `workeroutput` was dropped, and the run stayed green with one `node down:` line as its only trace (fixed in 4e535b1 by sanitising at the wire; evidence in outputs/operations/overlay-gate-2026-09-06/). Before that fix the spread over one unchanged tree was 5% on children and 6% on distinct tests; after it, three HELM runs across a hundredfold change in machine load gave 2713 distinct tests every single time. THE HEADROOM IS FOR CONCURRENCY, NOT FOR NOISE, and that distinction was paid for. Five of six HELM runs gave 6921/2713 exactly, at starting loads from 0.11 to 13.67, so LOAD no longer moves either number. The sixth gave 6925/2714 and was the only one running while a YARD wrote into the shared data overlay: the corpus some tests walk changed underneath them mid-run. A first attempt set the thresholds at the observed values with no margin at all, on three runs and an argument that a margin over a stable number only buys silence for a regression. That argument was right about noise and blind to concurrency, and the very next run went red. The margin here is sized to the one measured perturbation (+4 children, +1 test per concurrent writer) and doubled for two, which is a number with a reason rather than a round one. THE COUNT REMAINS CLONE-DEPENDENT: 50 tests skip in a worktree (MAIN_CLONE_SKIP, 'no data overlay on this clone'), measured the same day as 6921 in HELM against 6814 in a yard on the identical commit, so never ratchet either number down from a figure a worktree reported. If this gate flaps again, the first thing to check is not the metric: assert that every worker delivered (`sum sent == sum received`) and grep the output for `node down`, because a green run is not evidence that every worker reported."
 }

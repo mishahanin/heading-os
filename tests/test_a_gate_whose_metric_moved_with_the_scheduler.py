@@ -76,6 +76,7 @@ unencodable byte. That defect, its measurement and its repair are in
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -356,17 +357,35 @@ def test_a_corrupt_baseline_file_still_fails_the_child_ratchet(
     assert "no `reachable_tests` key" in reporter.text(), reporter.text()
 
 
-def test_the_committed_baseline_still_carries_the_untouched_child_ratchet():
-    """The brief's first boundary, asserted rather than promised: the file that
-    ships still enforces 6100 children, and the distinct measure is not armed
-    behind the operator's back."""
+def test_the_committed_baseline_carries_two_measured_numbers():
+    """Both thresholds are present, whole, and carry the date they were taken.
+
+    THIS TEST HAS CHANGED ITS QUESTION, and the reason is worth keeping. It was
+    written as `..._still_carries_the_untouched_child_ratchet`, asserting
+    `reachable_children == 6100` and `"reachable_tests" not in data`: the
+    branch's promise that it had armed nothing behind the operator's back while
+    he had not yet named a number. That premise expired on 2026-09-06 when he
+    named both, and a test whose premise has expired fails on the very change it
+    was written to permit.
+
+    So it now asserts the durable property instead of the moment: the file
+    states two integers and the date they were measured. What kept the operator
+    in control was never this assertion. It is that the numbers live in a
+    committed file, so moving one is a diff someone reads, and that
+    `test_the_baseline_is_a_committed_measured_number` pins the DATE to a
+    literal, which forces whoever moves a number to write down why.
+    """
     data = json.loads((ROOT / "config" / "overlay-reachability-baseline.json")
                       .read_text(encoding="utf-8"))
-    assert data["reachable_children"] == 6100
-    assert "reachable_tests" not in data, (
-        "a distinct-test threshold appeared in the committed baseline; that "
-        "number is the operator's to choose"
+    for key in ("reachable_children", "reachable_tests"):
+        assert isinstance(data[key], int), f"{key} is not a whole number"
+        assert data[key] > 0, f"{key} is {data[key]}, which enforces nothing"
+    assert data["reachable_children"] > data["reachable_tests"], (
+        "every distinct spawning test contributes at least one child, so the "
+        "child count cannot be the smaller of the two; one of them was measured "
+        "wrong or the two keys were swapped"
     )
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", data["measured"]), data["measured"]
 
 
 # ============================================================

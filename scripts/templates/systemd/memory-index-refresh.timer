@@ -1,16 +1,29 @@
 [Unit]
-Description=Daily 31C associative-memory index refresh (03:30, configured timezone)
+Description=Hourly 31C associative-memory index refresh (configured timezone)
 
 [Timer]
-# Daily incremental refresh. This build genuinely does no date math, so the hour
-# is cosmetic -- 03:30 is simply a low-traffic slot. The zone is still named:
-# "low-traffic" is a claim about the operator's night, not the host's, and a
-# machine on another zone would run this in the middle of a working afternoon.
-# Persistent=true runs a missed fire on next boot, which also covers the
-# "refresh after the machine was off / rebooted" case without a separate
-# OnBootSec trigger (and avoids an immediate fire racing a manual build at
-# install time).
-OnCalendar=*-*-* 03:30:00 {{TZ}}
+# HOURLY since 2026-09-06, daily at 03:30 before that. The refresh is
+# INCREMENTAL: `memory-index.py build` re-embeds only files whose mtime moved,
+# and `--force` is the flag that ignores mtime, so an unchanged corpus costs a
+# stat per file and nothing else. MEASURED that day in HELM: a build carrying
+# two new memory files took 44 s across both stores.
+#
+# The daily slot was not a cadence anyone chose; it was a low-traffic hour for a
+# job assumed to be expensive. What it actually bought was a window in which a
+# memory written at 20:26 could not be recalled until 03:30 the next morning,
+# measured on this workspace the day this changed: two memories written during a
+# session were absent from `/recall` for the rest of it. An assistant that
+# cannot retrieve what it just learned is the defect; the hour was never the
+# point.
+#
+# Hourly closes that window from a day to an hour at a cost of 44 s per hour on
+# a machine that is otherwise idle at night. Persistent=true still runs a missed
+# fire on next boot, which covers the machine having been off.
+#
+# The zone is still named rather than left to the host: it costs nothing here,
+# and every other unit in this workspace names it, so an hourly unit that
+# silently dropped the convention would read as an oversight later.
+OnCalendar=*-*-* *:15:00 {{TZ}}
 Persistent=true
 
 [Install]

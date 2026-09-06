@@ -8,7 +8,7 @@
 #
 # Renders scripts/templates/systemd/memory-index-refresh.{service,timer}
 # (substituting {{WORKSPACE}} and {{PYTHON}}) into ~/.config/systemd/user/, then
-# enables a DAILY timer (03:30 host-local, Persistent) that runs an INCREMENTAL
+# enables an HOURLY timer (:15 past, host-local, Persistent) that runs an INCREMENTAL
 # `scripts/memory-index.py build` -- re-embedding only changed notes so recall
 # never silently goes stale. The "hippocampus" (.memory-index/index.db) is kept
 # in parity with the "neocortex" (git-tracked note layers).

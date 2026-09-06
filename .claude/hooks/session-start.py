@@ -753,8 +753,49 @@ def check_yard_bootstrap(workspace_root):
             f"registrations are missing here. " + hint)
 
 
+def check_yard_marker(workspace_root):
+    """Warn when a session runs in a YARD without `HEADING_OS_YARD` in its env.
+
+    The bootstrap starts the agent as `herdr pane run <pane> "HEADING_OS_YARD=1
+    exec <agent>"`, and that assignment is the whole point of the line: it is
+    exported into the AGENT PROCESS, inherited by its shells, their children and
+    the git hooks those children run, and it is what the yard-side guards read.
+
+    MEASURED 2026-09-06 in `.yard/.heading-os/yard-yard-deletion-guard`: an
+    agent started BY HAND, from an older instruction that carried no marker, won
+    the race against the bootstrap's own line by 0.8 s. The bootstrap's command
+    then arrived at an agent that was already alive and was consumed as a
+    PROMPT. `/proc/<pid>/environ` held no `HEADING_OS_YARD`, the bootstrap wrote
+    an honest `status: ok` at step 11 because it had done its part, and nothing
+    anywhere reported that the session was running with the marker absent.
+
+    The "am I in a yard" signal is `.git` being a FILE, the same property
+    `check_yard_bootstrap` above uses, and deliberately NOT the variable this
+    function is checking for: a check that read the marker to decide whether the
+    marker matters would prove itself and fire never.
+
+    An alert, not a block. SessionStart cannot refuse a session, and the repair
+    is one command the operator runs.
+    """
+    try:
+        if not (workspace_root / ".git").is_file():
+            return None                       # the main clone, or not a repo
+    except OSError:
+        return None
+
+    if os.environ.get("HEADING_OS_YARD"):
+        return None
+
+    return ("YARD MARKER MISSING: this is a worktree and `HEADING_OS_YARD` is "
+            "absent from this session's environment, so every guard that reads "
+            "it is inert here. It is exported into the agent PROCESS, so it "
+            "cannot be repaired from inside this session and no file carries "
+            "it. Close this session and start it as: cd here, then "
+            "`HEADING_OS_YARD=1 claude --dangerously-skip-permissions`.")
+
+
 def check_yards_without_a_session(workspace_root):
-    """Name every worktree of this repository that holds no transcript.
+    """Name every worktree of this repository with no live Claude session in it.
 
     The sibling above asks about THIS checkout. This one asks about the others,
     and it is a separate question with a separate answer: a worktree can be
@@ -778,9 +819,17 @@ def check_yards_without_a_session(workspace_root):
     An alert, never a block, and never an action: starting an agent is a change
     to what runs on this machine, which a hook does not get to make on its own.
 
+    THE SIGNAL CHANGED ON 2026-09-06, and the reason is in
+    `scripts/utils/yard_sessions.py`: a transcript answers about the past, so a
+    correctly provisioned yard whose agent had not been spoken to was named,
+    and a yard whose agent had exited was not. It is now a live process with
+    `comm == "claude"` whose cwd IS the checkout, with the transcript kept only
+    for an unreadable `/proc` and reported as the weaker signal when it is used.
+
     Against the hook's time budget: MEASURED 2026-09-06, 3.7 ms per sweep over
-    one registered worktree, which is one `git rev-parse` plus a directory
-    listing per yard. It scales with the number of yards, not with their size.
+    one registered worktree for the git side, plus 0.8 ms per yard for the
+    `/proc` walk over 76 processes. It scales with the number of yards and the
+    number of processes, never with the size of a tree.
     """
     try:
         if not (workspace_root / ".git").is_dir():
@@ -810,8 +859,14 @@ def check_yards_without_a_session(workspace_root):
         return (f"YARD SESSION SWEEP FAILED ({type(exc).__name__}: {exc}). No "
                 "worktree was checked for a transcript.")
 
-    if report.unknown:
-        return f"WORKTREES NOT CHECKED FOR A TRANSCRIPT: {report.unknown}."
+    # `unknown` is no longer exclusive with a result. Since 2026-09-06 the sweep
+    # falls back to the transcript when `/proc` cannot be read, and says so
+    # there rather than returning nothing, so the caveat is PREPENDED to the
+    # names instead of replacing them. Returning early on it would throw away
+    # the answer whenever the weaker signal was the one available.
+    caveat = f" (CAVEAT: {report.unknown})" if report.unknown else ""
+    if report.unknown and not report.checked:
+        return f"WORKTREES NOT CHECKED FOR A LIVE AGENT: {report.unknown}."
     if not report.silent:
         return None
 
@@ -819,11 +874,12 @@ def check_yards_without_a_session(workspace_root):
     shown = ", ".join(names[:8])
     if len(names) > 8:
         shown += f", and {len(names) - 8} more"
-    return (f"{len(report.silent)} of {len(report.checked)} worktree(s) hold no "
-            f"transcript, so no agent has ever run in them: {shown}. "
+    return (f"{len(report.silent)} of {len(report.checked)} worktree(s) have no "
+            f"Claude session standing in them: {shown}{caveat}. "
             f"`herdr worktree create` opens a shell, not an agent, and a yard "
             f"without one shows a NEIGHBOUR's work in the sidebar. Start one: "
-            f"cd into the yard, then `HEADING_OS_YARD=1 claude`.")
+            f"cd into the yard, then "
+            f"`HEADING_OS_YARD=1 claude --dangerously-skip-permissions`.")
 
 
 def main():
@@ -883,6 +939,10 @@ def main():
     yard_alert = check_yard_bootstrap(workspace_root)
     if yard_alert:
         alerts.append(yard_alert)
+
+    marker_alert = check_yard_marker(workspace_root)
+    if marker_alert:
+        alerts.append(marker_alert)
 
     fleet_alert = check_yards_without_a_session(workspace_root)
     if fleet_alert:

@@ -18,21 +18,41 @@ best-effort in four separate ways:
     somewhere else entirely, with the exit code saying nothing.
 
 The visible result: a yard in the sidebar with nothing of its own to show, into
-whose slot FleetView renders a NEIGHBOURING yard's session. Nothing on this
-machine asked the one question that settles it, which is not about panes or
-status files but about transcripts on disk: Claude Code writes one
-`<session-id>.jsonl` under `~/.claude/projects/<slug>/` per session, so zero of
-them under a checkout's own slug means no agent has ever run there.
+whose slot FleetView renders a NEIGHBOURING yard's session.
 
-WHERE THE CHECK LIVES, AND WHY
+THE SIGNAL CHANGED ON 2026-09-06, AND THIS FILE IS MOSTLY ABOUT WHY
 
-`.claude/hooks/session-start.py` already carries `check_yard_bootstrap`, which
-asks whether THIS checkout was provisioned. The new `check_yards_without_a_session`
-is beside it because the operator already reads yard health there, but it is a
-separate function because it is a separate question with a separate subject: the
-OTHER checkouts. It runs in HELM only. A session inside a yard, by existing at
-all, writes the transcript that would clear that yard, and a fleet-wide list
-printed once per yard is the same list N times.
+The first version of this check asked whether `~/.claude/projects/<slug>/` held
+any `*.jsonl`. A transcript is a RECORD. It answers a question about the past,
+and the question is about now. Both directions were measured the day it landed
+and both were wrong:
+
+  * A freshly created yard: bootstrap at `ok/11`, agent up, `/proc/<pid>/comm`
+    == `claude`, cwd == the checkout, `HEADING_OS_YARD=1` in its environment --
+    and its project directory held only `memory/`, ZERO transcripts. A session
+    writes nothing until it is spoken to. So the check named every correctly
+    provisioned yard at the moment of its creation, which is a false alarm
+    delivered exactly when everything is right, and an alarm like that teaches
+    its reader to skip the line.
+  * Worse the other way: both yards alive that day EXITED cleanly (code 0, seven
+    to fourteen seconds after the focus moved) and each left its transcript
+    behind, so a dead yard read as alive -- the failure the check exists to
+    report.
+
+The signal is now a LIVE PROCESS: `comm == "claude"` whose `/proc/<pid>/cwd` IS
+the checkout. Equality, not containment: an agent runs at the checkout root, and
+a build or a shell in a subdirectory is not an agent. The transcript survives as
+a FALLBACK for one case only, an unreadable `/proc`, and `unknown` then says the
+weaker signal was used.
+
+HOW THE BENCH IS BUILT, and it is not incidental. A live agent is staged by
+copying `/bin/sleep` to a file named `claude` and running it with its cwd in the
+worktree: `/proc/<pid>/comm` is the kernel's task name, so that copy reads as
+`claude` and the real `/proc` answers the real question. NOT by pointing the
+sweep at a fabricated `/proc` through an environment variable -- a variable
+naming an alternative `/proc` is a way into the guard from outside the process,
+and the one case that does need a bench (an unreadable `/proc`) uses the
+`proc_root` PARAMETER, which nothing outside a caller can set.
 
 THE SLUG RULE IS NOT REPRODUCED
 
@@ -47,8 +67,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -85,87 +107,211 @@ def _write_transcript(checkout: Path) -> Path:
     return path
 
 
+class _Agent:
+    """A real process whose `/proc/<pid>/comm` is `claude`, standing in a cwd.
+
+    A copy of `/bin/sleep` under the name `claude`: the kernel takes `comm` from
+    the executable's basename, so this is indistinguishable from an agent by the
+    only property the sweep reads. It is a REAL process against the REAL
+    `/proc`, which is what makes the pass here evidence about the machine rather
+    than about a fixture.
+    """
+
+    def __init__(self, tmp_path: Path, cwd: Path, name: str = "claude"):
+        source = Path("/bin/sleep")
+        if not source.exists():
+            pytest.skip("no /bin/sleep to stage an agent from")
+        binary = tmp_path / name
+        if not binary.exists():
+            shutil.copy(str(source), str(binary))
+            binary.chmod(0o755)
+        self.process = subprocess.Popen([str(binary), "120"], cwd=str(cwd))
+        # comm is set by exec, which has not necessarily happened when Popen
+        # returns. Wait for the kernel to agree before asserting anything about
+        # it, so a pass is about the sweep rather than about scheduling.
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                comm = Path(f"/proc/{self.process.pid}/comm").read_text().strip()
+            except OSError:
+                comm = ""
+            if comm == name:
+                return
+            time.sleep(0.02)
+        self.stop()
+        pytest.skip(f"the staged process never reported comm=={name!r}")
+
+    @property
+    def pid(self) -> int:
+        return self.process.pid
+
+    def stop(self) -> None:
+        self.process.kill()
+        self.process.wait(timeout=30)
+
+
+@pytest.fixture
+def agent_factory(tmp_path):
+    started: list[_Agent] = []
+
+    def make(cwd: Path, name: str = "claude") -> _Agent:
+        agent = _Agent(tmp_path, cwd, name)
+        started.append(agent)
+        return agent
+
+    yield make
+    for agent in started:
+        agent.stop()
+
+
 # ============================================================
-# The sweep itself
+# The live-process signal
 # ============================================================
 
-def test_a_worktree_with_no_transcript_is_named(tmp_path, monkeypatch,
-                                                temporary_worktree, worktree_origin):
-    """The defect, reproduced: a real worktree, no agent ever in it."""
-    home = _home(tmp_path, monkeypatch)
-    (home / ".claude" / "projects").mkdir(parents=True)
-
+def test_a_yard_with_no_agent_in_it_is_named(tmp_path, monkeypatch,
+                                             temporary_worktree, worktree_origin):
+    """The defect, reproduced: a real worktree with nothing running in it."""
+    _home(tmp_path, monkeypatch)
     report = yards_without_a_session(worktree_origin)
     assert report.unknown is None, report.unknown
     assert temporary_worktree.resolve() in report.silent, (
-        f"the silent yard was not named; checked={report.checked}"
-    )
+        f"the silent yard was not named; checked={report.checked}")
 
 
-def test_an_emptied_transcript_directory_counts_as_no_session(
-        tmp_path, monkeypatch, temporary_worktree, worktree_origin):
-    """The second way a yard has no transcript, and it is not hypothetical.
+def test_a_live_agent_with_no_transcript_yet_is_not_named(
+        tmp_path, monkeypatch, temporary_worktree, worktree_origin,
+        agent_factory):
+    """The false alarm the old signal produced, and the reason for this change.
 
-    `scripts/archive-transcripts.py` MOVES transcripts out of
-    `~/.claude/projects/<slug>/` on a timer, so the directory outliving its
-    contents is the ordinary end state of an old yard. A check that asks only
-    whether the directory exists reads that as a healthy yard.
-
-    Found by mutation: replacing the `.jsonl` test with `if False:` left this
-    file green, because every other case here reaches the answer through the
-    directory being ABSENT.
+    MEASURED 2026-09-06: a yard created minutes earlier, provisioned to `ok/11`,
+    with a live agent in it, held ZERO transcripts, because a session writes
+    nothing until it is spoken to. The old check named it. Naming a yard at the
+    exact moment everything about it is correct is how an alert stops being
+    read.
     """
     home = _home(tmp_path, monkeypatch)
-    emptied = transcript_dir(temporary_worktree)
-    emptied.mkdir(parents=True)
-    (emptied / "notes.md").write_text("not a transcript\n", encoding="utf-8")
+    (home / ".claude" / "projects").mkdir(parents=True)
+    assert not any(transcript_dir(temporary_worktree).glob("*.jsonl")) \
+        if transcript_dir(temporary_worktree).is_dir() else True
 
+    agent_factory(temporary_worktree)
     report = yards_without_a_session(worktree_origin)
     assert report.unknown is None, report.unknown
-    assert temporary_worktree.resolve() in report.silent, (
-        "a directory holding no .jsonl was read as a session"
-    )
+    assert report.silent == (), (
+        f"a yard holding a live agent was named: {report.silent}")
+    assert temporary_worktree.resolve() in report.checked, (
+        "the yard was not examined at all, so the clean answer means nothing")
 
 
-def test_a_worktree_with_a_transcript_is_not_named(tmp_path, monkeypatch,
-                                                   temporary_worktree, worktree_origin):
-    """The other side, and the one that decides whether this is usable: a yard
-    an agent HAS run in must stay off the list, or the alert is noise the
-    operator learns to ignore."""
+def test_an_exited_agent_that_left_its_transcript_is_named(
+        tmp_path, monkeypatch, temporary_worktree, worktree_origin):
+    """The worse half, and the one the old signal got backwards.
+
+    Both yards alive on 2026-09-06 exited cleanly and left their transcripts on
+    disk. A check reading the transcript calls that yard alive, which is the
+    exact state this module exists to report.
+    """
     _home(tmp_path, monkeypatch)
     _write_transcript(temporary_worktree)
 
     report = yards_without_a_session(worktree_origin)
     assert report.unknown is None, report.unknown
-    assert report.silent == (), f"a yard with a transcript was named: {report.silent}"
-    assert temporary_worktree.resolve() in report.checked, (
-        "the yard was not examined at all, so the clean answer means nothing"
-    )
+    assert temporary_worktree.resolve() in report.silent, (
+        "a yard whose agent exited was read as alive because the transcript "
+        "it left behind is still on disk")
 
 
-def test_an_absent_projects_store_is_unknown_and_not_a_clean_sweep(
+def test_a_process_in_a_subdirectory_is_not_an_agent(
+        tmp_path, monkeypatch, temporary_worktree, worktree_origin,
+        agent_factory):
+    """Equality, not containment. An agent runs AT the checkout root.
+
+    Containment would clear a yard because a test runner, a build or a stray
+    shell happens to sit in one of its subdirectories.
+    """
+    _home(tmp_path, monkeypatch)
+    inside = temporary_worktree / "scripts"
+    inside.mkdir(exist_ok=True)
+    agent_factory(inside)
+
+    report = yards_without_a_session(worktree_origin)
+    assert temporary_worktree.resolve() in report.silent, (
+        "a process in a subdirectory was counted as the yard's agent")
+
+
+def test_a_process_that_is_not_an_agent_does_not_clear_the_yard(
+        tmp_path, monkeypatch, temporary_worktree, worktree_origin,
+        agent_factory):
+    """Same cwd, different `comm`. A shell standing in a yard is not a session."""
+    _home(tmp_path, monkeypatch)
+    agent_factory(temporary_worktree, name="not-an-agent")
+
+    report = yards_without_a_session(worktree_origin)
+    assert temporary_worktree.resolve() in report.silent, (
+        "any process at all was counted as an agent")
+
+
+# ============================================================
+# The fallback, and that it announces itself
+# ============================================================
+
+def test_an_unreadable_proc_falls_back_and_says_the_signal_was_weaker(
         tmp_path, monkeypatch, temporary_worktree, worktree_origin):
-    """No `~/.claude/projects` at all: the check must not crash, must not name
-    every yard, and must not report clean either.
+    """`/proc` gone: the answer still comes, and it is labelled.
 
-    Naming every yard would be a wall of false alarms on a machine where the
-    store simply is not there yet. Reporting clean would be the worse half of
-    the same mistake: a caller reading "no silent yards" as "the fleet is fine"
-    over a question nobody managed to ask.
+    Silence here would be the defect one level up -- an answer resting on the
+    signal that was just measured wrong, presented as if it rested on the one
+    that replaced it.
+    """
+    home = _home(tmp_path, monkeypatch)
+    (home / ".claude" / "projects").mkdir(parents=True)
+
+    report = yards_without_a_session(worktree_origin,
+                                     proc_root=tmp_path / "no-proc-here")
+    assert report.unknown, "the fallback did not announce itself"
+    assert "WEAKER" in report.unknown
+    assert temporary_worktree.resolve() in report.silent, (
+        "the fallback produced no answer at all")
+
+
+def test_the_fallback_clears_a_yard_that_has_a_transcript(
+        tmp_path, monkeypatch, temporary_worktree, worktree_origin):
+    """The paired direction: the weak signal is still a signal, not a refusal."""
+    _home(tmp_path, monkeypatch)
+    _write_transcript(temporary_worktree)
+
+    report = yards_without_a_session(worktree_origin,
+                                     proc_root=tmp_path / "no-proc-here")
+    assert report.unknown, "the caveat was dropped"
+    assert report.silent == (), f"a yard with a transcript was named: {report.silent}"
+
+
+def test_an_absent_projects_store_under_the_fallback_is_unknown_not_clean(
+        tmp_path, monkeypatch, temporary_worktree, worktree_origin):
+    """Neither signal available: not a clean sweep, and not a wall of alarms.
+
+    Naming every yard would be a false alarm on a machine where the store is
+    simply not there yet. Reporting clean would be the worse half of the same
+    mistake: a caller reading "no silent yards" as "the fleet is fine" over a
+    question nobody managed to ask.
     """
     home = _home(tmp_path, monkeypatch)
     assert not (home / ".claude" / "projects").exists()
 
-    report = yards_without_a_session(worktree_origin)
-    assert report.unknown, "an absent transcript store was not reported as unknown"
+    report = yards_without_a_session(worktree_origin,
+                                     proc_root=tmp_path / "no-proc-here")
+    assert report.unknown, "both signals were unavailable and nothing said so"
     assert str(home / ".claude" / "projects") in report.unknown
     assert report.silent == (), "yards were named over a store that does not exist"
 
 
+# ============================================================
+# Properties that survived the change
+# ============================================================
+
 def test_the_callers_own_checkout_is_never_named(tmp_path, monkeypatch,
                                                  temporary_worktree, worktree_origin):
-    """At SessionStart the running session's transcript may not be on disk yet,
-    so without the exclusion the sweep names the very tree it runs in."""
+    """`exclude` still drops a checkout the caller can vouch for itself."""
     home = _home(tmp_path, monkeypatch)
     (home / ".claude" / "projects").mkdir(parents=True)
 
@@ -176,14 +322,14 @@ def test_the_callers_own_checkout_is_never_named(tmp_path, monkeypatch,
 
 
 def test_a_registration_whose_checkout_is_gone_is_not_a_yard(
-        tmp_path, monkeypatch, temporary_worktree, worktree_origin):
+        tmp_path, monkeypatch, temporary_worktree, worktree_origin,
+        agent_factory):
     """`git worktree remove` can half-fail and leave the registration behind.
     A pointer to a directory that no longer exists is not a yard without a
     session; it is not a yard. Reporting it would train the operator to ignore
     the whole alert."""
-    home = _home(tmp_path, monkeypatch)
-    (home / ".claude" / "projects").mkdir(parents=True)
-    _write_transcript(temporary_worktree)
+    _home(tmp_path, monkeypatch)
+    agent_factory(temporary_worktree)
 
     ghost = worktree_origin / ".git" / "worktrees" / "ghost"
     ghost.mkdir(parents=True)
@@ -216,6 +362,33 @@ def test_the_slug_rule_is_not_reproduced_here():
     )
 
 
+def test_the_proc_question_has_one_owner():
+    """Three callers wanted it in one day; one module answers it.
+
+    A second copy is the one that stops being fixed, and this repository's
+    dominant defect shape is a fix that landed in one of N copies.
+
+    Asked of the AST rather than of the text. A substring scan for the path goes
+    red the moment a comment quotes it to explain what the module reads, which
+    teaches people to stop explaining; the question is whether this module
+    CALLS the primitives, and only the tree can answer that.
+    """
+    import ast
+
+    source = _MODULE.read_text(encoding="utf-8")
+    assert "from scripts.utils.proc_cwd import processes_in" in source
+    called = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            called.add(node.func.attr)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            called.add(node.func.id)
+    walking = called & {"scandir", "readlink", "listdir"}
+    assert not walking, (
+        f"yard_sessions walks the process table itself ({sorted(walking)}) "
+        f"instead of asking the owner")
+
+
 # ============================================================
 # The hook, driven as the harness drives it
 # ============================================================
@@ -236,7 +409,7 @@ def _drive(cwd: Path, home: Path) -> subprocess.CompletedProcess:
 
 
 @pytest.mark.slow
-def test_the_hook_names_a_silent_yard_from_the_main_clone(
+def test_the_hook_names_a_yard_with_no_session_from_the_main_clone(
         tmp_path, monkeypatch, temporary_worktree, worktree_origin):
     """End to end, at the real entry point, asserting the observable output."""
     home = tmp_path / "home"
@@ -244,29 +417,39 @@ def test_the_hook_names_a_silent_yard_from_the_main_clone(
 
     proc = _drive(worktree_origin, home)
     assert proc.returncode == 0, proc.stderr[-600:]
-    assert "hold no transcript" in proc.stdout, proc.stdout[-900:]
+    assert "no Claude session standing in them" in proc.stdout, proc.stdout[-900:]
     assert temporary_worktree.name in proc.stdout
 
 
 @pytest.mark.slow
-def test_the_hook_is_silent_when_every_yard_has_a_transcript(
-        tmp_path, monkeypatch, temporary_worktree, worktree_origin):
-    """The half that fails if the alert fires unconditionally."""
+def test_the_hook_is_silent_when_a_live_agent_stands_in_every_yard(
+        tmp_path, monkeypatch, temporary_worktree, worktree_origin,
+        agent_factory):
+    """The half that fails if the alert fires unconditionally.
+
+    No transcript is written here on purpose: this is the freshly-created yard
+    the old signal named, driven through the real hook against the real
+    `/proc`.
+    """
     home = tmp_path / "home"
     (home / ".claude" / "projects").mkdir(parents=True)
-    monkeypatch.setenv("HOME", str(home))
-    _write_transcript(temporary_worktree)
+    agent_factory(temporary_worktree)
 
     proc = _drive(worktree_origin, home)
     assert proc.returncode == 0, proc.stderr[-600:]
-    assert "hold no transcript" not in proc.stdout, proc.stdout[-900:]
+    assert "no Claude session standing in them" not in proc.stdout, \
+        proc.stdout[-900:]
 
 
 @pytest.mark.slow
 def test_the_hook_survives_a_machine_with_no_projects_directory(
         tmp_path, temporary_worktree, worktree_origin):
-    """The brief's third case. The hook is an alert surface: it exits 0 and
-    still delivers, and it says the state is unknown rather than clean."""
+    """The transcript store is gone and the live signal does not need it.
+
+    Before 2026-09-06 an absent store meant the sweep could answer nothing at
+    all. It is now only the fallback's input, so the hook still reports the
+    yard, and it still exits 0 with no traceback.
+    """
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     assert not (home / ".claude" / "projects").exists()
@@ -274,7 +457,7 @@ def test_the_hook_survives_a_machine_with_no_projects_directory(
     proc = _drive(worktree_origin, home)
     assert proc.returncode == 0, proc.stderr[-600:]
     assert "Traceback" not in proc.stderr, proc.stderr[-900:]
-    assert "NOT CHECKED FOR A TRANSCRIPT" in proc.stdout, proc.stdout[-900:]
+    assert temporary_worktree.name in proc.stdout, proc.stdout[-900:]
 
 
 @pytest.mark.slow
@@ -287,5 +470,6 @@ def test_a_yard_does_not_report_on_its_neighbours(
 
     proc = _drive(temporary_worktree, home)
     assert proc.returncode == 0, proc.stderr[-600:]
-    assert "hold no transcript" not in proc.stdout, proc.stdout[-900:]
-    assert "NOT CHECKED FOR A TRANSCRIPT" not in proc.stdout
+    assert "no Claude session standing in them" not in proc.stdout, \
+        proc.stdout[-900:]
+    assert "NOT CHECKED FOR A LIVE AGENT" not in proc.stdout

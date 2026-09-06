@@ -375,10 +375,20 @@ def test_checks_list_has_ten_branches(dispatch):
     working-method correction (a relative path run from the wrong directory),
     and this one protects the live workspace of another session.
 
+    `check_yard_deletion_guard` joined on 2026-09-06, directly after
+    `check_yard_write_guard`. The two are siblings pointed opposite ways: that
+    one refuses a YARD reaching OUT of itself, this one refuses a deletion of a
+    worktree that is not finished, which is HELM's mistake rather than a task's.
+    It sits below its sibling because a command can be both, and "you reached
+    into a neighbour" is the more specific answer for one that is; it sits above
+    `check_cwd_anchor` for the same reason its sibling does, since that one is a
+    working-method correction and this one is the only irreversible loss in the
+    HELM/YARD cycle.
+
     The tripwire is the point. This assertion does not drift with the list; a
     new check fails it until its author writes down where in the order it
     belongs and why."""
-    assert len(dispatch.CHECKS) == 12
+    assert len(dispatch.CHECKS) == 13
     names = [c.__name__ for c in dispatch.CHECKS]
     assert names == [
         "check_prevent_secrets",
@@ -387,6 +397,7 @@ def test_checks_list_has_ten_branches(dispatch):
         "check_protect_corporate",
         "check_protect_docs",
         "check_yard_write_guard",
+        "check_yard_deletion_guard",
         "check_cwd_anchor",
         "check_slow_shell",
         "check_rate_limit",

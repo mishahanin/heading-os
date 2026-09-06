@@ -637,6 +637,51 @@ if [ "$DOCTOR_ONLY" -eq 0 ]; then
     "$HERDR" pane run "$PANE_ID" "HEADING_OS_YARD=1 exec $AGENT_CMD" \
       >/dev/null 2>&1 \
       || log "could not start the agent; start it by hand: HEADING_OS_YARD=1 $AGENT_CMD"
+
+    # WAS THERE ALREADY AN AGENT HERE, AND DOES IT CARRY THE MARKER?
+    #
+    # MEASURED 2026-09-06 in this very yard: an agent started BY HAND, from an
+    # older instruction with no marker, won the race against the line above by
+    # 0.8 s. `pane run` then delivered its command to a live agent, which read
+    # it as a PROMPT. `/proc/<pid>/environ` held no HEADING_OS_YARD, step 11
+    # wrote an honest `status: ok`, and the session ran with the yard-side
+    # guards inert while everything reported success.
+    #
+    # ONE SCAN, NO POLLING, and that bound is deliberate. An agent this line
+    # just started does not exist yet, and no fixed wait can tell "still
+    # booting" from "never came up": a poll long enough to be reliable would
+    # charge every yard creation for it and STILL be a race. So this answers
+    # only the question that has a non-racy answer -- is somebody ALREADY
+    # standing here without the marker -- which is exactly the case measured.
+    # The other direction is covered where it can be answered for certain, by
+    # `check_yard_marker` in `.claude/hooks/session-start.py`, which runs inside
+    # the agent's own process and reads its own environment.
+    python3 - "$WT_PATH" <<'PROBE' 2>/dev/null | while IFS= read -r line; do log "$line"; done
+import os, sys
+root = os.path.realpath(sys.argv[1])
+for entry in os.scandir("/proc"):
+    if not entry.name.isdigit():
+        continue
+    try:
+        cwd = os.readlink(f"/proc/{entry.name}/cwd")
+        cmd = open(f"/proc/{entry.name}/cmdline", "rb").read().replace(b"\0", b" ")
+    except OSError:
+        continue
+    if cwd != root and not cwd.startswith(root + os.sep):
+        continue
+    if b"claude" not in cmd:
+        continue
+    try:
+        env = open(f"/proc/{entry.name}/environ", "rb").read().split(b"\0")
+    except OSError:
+        continue
+    if any(v.startswith(b"HEADING_OS_YARD=") and v.split(b"=", 1)[1] for v in env):
+        continue
+    print(f"MARKER MISSING: agent pid {entry.name} was already running here "
+          f"without HEADING_OS_YARD, so the yard guards are inert in it. "
+          f"Stop it and start it as: "
+          f"HEADING_OS_YARD=1 claude --dangerously-skip-permissions")
+PROBE
   fi
 fi
 

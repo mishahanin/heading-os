@@ -217,6 +217,19 @@ DECLARED_CLAIMANTS: dict[str, dict[str, tuple[str, str]]] = {
             "this session's handoff pointer",
             "session_slug"),
     },
+    # "this session's environment" is the one subject a hook is entitled to
+    # without asking anybody, and it is worth saying why rather than waving it
+    # through. The harness starts this hook as a CHILD of the session, so the
+    # session's environment IS this process's environment, inherited at fork.
+    # `os.environ` is therefore not a proxy for the claim; it is the claim,
+    # read directly. The contrast with the two dispatcher walls above is the
+    # point: those needed `actor_id` because a payload can arrive from a
+    # DISPATCHING session, and nothing about a payload reaches this one.
+    ".claude/hooks/session-start.py": {
+        "d8ab9548b98f": (  # pragma: allowlist secret
+            "yard marker missing: this is a worktree and `heading_os_yard` is absent",
+            "environ"),
+    },
     ".claude/hooks/turn-check.py": {
         "1193c66ab33d": (
             "`scripts/turn-check.py` failed on the uncommitted python edits in this t",

@@ -384,34 +384,54 @@ was clean; the command that was typed would not have known the difference.</p>
 worktree of this repository that is not finished. Finished means all three of:
 a clean working tree (<code>git status --porcelain</code> in THAT tree), no commit on its
 HEAD that <code>main</code> cannot reach (<code>rev-list --count main..HEAD</code>, which answers for
-a detached HEAD too), and nothing standing in it that the command would not
-close (<code>/proc/&lt;pid&gt;/cwd</code>, 0.8 ms over 76 processes). It recognises forms rather
-than one string:
+a detached HEAD too), and no LIVE process standing in it that the command would
+not close (<code>/proc/&lt;pid&gt;/cwd</code>, 0.8 ms over 76 processes). It recognises forms
+rather than one string:
 <code>git worktree remove</code> with and without <code>--force</code>, <code>rm -r</code> and <code>rm -rf</code> by any
 spelling including a directory that merely contains yards, and
 <code>herdr worktree remove --workspace &lt;ID&gt;</code>, whose path is resolved from herdr&rsquo;s
 own session record before the command is judged. Every unmet condition is named,
 because &ldquo;commit it&rdquo;, &ldquo;merge it&rdquo; and &ldquo;use the spelling that closes the session&rdquo;
 are three different instructions.</p>
-<p>The third condition carries an ownership clause, and it is a correction rather
-than a nicety. Asked as &ldquo;is anybody in it&rdquo;, the wall refused the last step of
-the cycle always: MEASURED 2026-09-06 against the live yard <code>w5M</code>, seven
-processes stood in it, the agent plus three MCP servers, the pane&rsquo;s shell and
-two children, and that is a yard&rsquo;s normal state at the moment its work is done.
-So the question is what the COMMAND does. <code>herdr worktree remove --workspace
-&lt;ID&gt;</code> closes that workspace&rsquo;s session as part of the removal, so a process
-belonging to <code>&lt;ID&gt;</code> is part of the operation; <code>rm -rf</code> and <code>git worktree remove</code>
-close nothing and leave every process inside with a deleted working directory,
-so for them the condition is unchanged. Ownership is read from
-<code>HERDR_WORKSPACE_ID</code>, which herdr exports into the pane and every descendant
-inherits: all seven processes carried it, every environment was readable, and a
-process started with the variable stripped read back as absent. A process whose
-environment cannot be read, or which carries a different workspace or none, is
-foreign and still refuses. The clause reaches condition 3 only, so <code>--force</code>
-over uncommitted work, the incident that prompted the wall, is untouched.</p>
-<p>Where a refusal is caused by the yard&rsquo;s own session alone, it names the herdr
-spelling with the workspace id in it, because at that point the operator is
-holding the wrong command rather than unfinished work.</p>
+<p>The third condition took two corrections on 2026-09-06, and they are the same
+correction twice: an exemption whose condition never arrives in practice, so the
+wall refuses the last step of the cycle always.</p>
+<p><strong>Ownership.</strong> Asked as &ldquo;is anybody in it&rdquo;, the wall refused every removal:
+MEASURED against the live yard <code>w5M</code>, seven processes stood in it, the agent
+plus three MCP servers, the pane&rsquo;s shell and two children, and that is a yard&rsquo;s
+normal state at the moment its work is done. So the question is what the COMMAND
+does. <code>herdr worktree remove --workspace &lt;ID&gt;</code> closes that workspace&rsquo;s session as
+part of the removal, so a process belonging to <code>&lt;ID&gt;</code> is part of the operation;
+<code>rm -rf</code> and <code>git worktree remove</code> close nothing and leave every process inside
+with a deleted working directory, so for them nothing is exempt on this ground.</p>
+<p><strong>Orphans.</strong> With ownership in place the wall still refused, on the first real
+deletion after the merge. MEASURED that day in HELM: fourteen processes stood in
+the yard, five its own and NINE naming <code>w4G</code>, a yard deleted weeks earlier and
+absent from both <code>herdr workspace list</code> and <code>session.json</code>. They are Claude
+Code&rsquo;s warmed background workers and the MCP servers they spawn, whose cwd
+drifts into live yards, and their number only grows. The decisive evidence runs
+against the condition for that class: <code>w4G</code>&rsquo;s own checkout was deleted under
+those very processes and nothing broke. So a process naming a workspace herdr no
+longer records is an orphan and is dropped for EVERY form, because the argument
+is about the process rather than about what the command closes. A process naming
+a LIVE workspace other than the one being closed still refuses, and so does one
+naming none. When herdr&rsquo;s record cannot be read, orphan cannot be told from
+neighbour, so nothing is dropped and the refusal says so.</p>
+<p>Both clauses read <code>HERDR_WORKSPACE_ID</code>, which herdr exports into the pane and
+every descendant inherits: all seven of <code>w5M</code>&rsquo;s processes carried it, every
+environment was readable, and a process started with the variable stripped read
+back as absent. Neither clause reaches conditions 1 or 2, so <code>--force</code> over
+uncommitted work, the incident that prompted the wall, is untouched. Telling a
+warmed worker by <code>bg-spare</code> in its argv was rejected deliberately: that is a list
+of the process shapes seen this week, the same mistake as writing a rule as a
+list of verbs.</p>
+<p>The refusal names one remedy per unmet condition and none for a condition that
+holds. The paragraph it replaced printed all of them, so the first live refusal
+ended &ldquo;commit the work and have HELM merge the branch&rdquo; against a yard whose work
+was committed and whose branch was merged. Where the only thing standing in a
+yard is its own session, the refusal carries the herdr spelling with the
+workspace id in it, because at that point the operator is holding the wrong
+command rather than unfinished work.</p>
 <p>Two bounds are stated rather than left to be found. A PreToolUse hook sees tool
 calls, so this closes what the AGENT can do and closes nothing inside a process
 one of its calls starts: a whole pytest run or a shell script is one Bash call.

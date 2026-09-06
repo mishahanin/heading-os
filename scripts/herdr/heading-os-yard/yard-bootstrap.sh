@@ -63,7 +63,22 @@ if [ -f "$PLUGIN_ENV" ]; then
   done < "$PLUGIN_ENV"
 fi
 
-AGENT_CMD="${HEADING_OS_AGENT_CMD:-claude}"
+# `--dangerously-skip-permissions` is the DEFAULT here, on the operator's
+# instruction of 2026-09-06: "когда запускается claude, не важно где и в каком
+# Yard, пусть всегда запускается с --dangerously-skip-permission".
+#
+# It is a default and not a hard-code, so `HEADING_OS_AGENT_CMD` still overrides
+# it in full -- an operator who wants prompts back sets that name in the plugin's
+# own `.env` and gets them, without editing this file.
+#
+# The flag is not the security boundary in a YARD and was never carrying that
+# job. What confines a yard is the write guard in `.claude/hooks/_dispatch.py`
+# plus `HEADING_OS_YARD=1` in the agent's environment, both of which run whatever
+# this flag says. Prompting only decided whether a human was asked first, and in
+# a yard that a human is not sitting at, the asking reached nobody: the agent
+# stalled on a dialog with no reader, which is how a yard came to look alive with
+# nothing happening in it.
+AGENT_CMD="${HEADING_OS_AGENT_CMD:-claude --dangerously-skip-permissions}"
 AUTOSTART="${HEADING_OS_AUTOSTART:-1}"
 BOOTSTRAP_VERSION="5.0"
 
@@ -621,10 +636,27 @@ if [ "$DOCTOR_ONLY" -eq 0 ]; then
     BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
   fi
   if [ -n "$WS_ID" ] && [ -n "$BRANCH" ] && [ "$BRANCH" != "HEAD" ]; then
-    case "$BRANCH" in
-      YARD/*) LABEL="$BRANCH" ;;
-      *)      LABEL="YARD/$BRANCH" ;;
-    esac
+    # THE WORKSPACE ID GOES IN THE LABEL, NEVER IN THE BRANCH OR THE PATH.
+    #
+    # The operator asked on 2026-09-06 for the code he hears from the assistant
+    # ("w5M") to be findable in the sidebar. It belongs here and nowhere more
+    # permanent, because the id is EPHEMERAL and the yard is not: the slug yard
+    # was w5N, then w5Q, then w5R within one hour on that day, each time its
+    # pane died and the workspace was recreated. A branch named `w5N-...` would
+    # have been wrong an hour later and wrong forever after, while the branch,
+    # the checkout path and the transcript slug all outlived every id.
+    #
+    # A label is derived, so it is simply rewritten on the next open. That is
+    # the whole reason this is safe.
+    #
+    # `YARD/` is not prepended any more: a branch already named `yard-...` came
+    # out as `YARD/yard-slug-one-owner`, which said the same word twice and
+    # crowded out the part that identifies the work. The `yard-` prefix is
+    # stripped for display only; the branch itself keeps whatever it was created
+    # with, because the path and the slug are derived from it.
+    DISPLAY_BRANCH="${BRANCH#YARD/}"
+    DISPLAY_BRANCH="${DISPLAY_BRANCH#yard-}"
+    LABEL="$WS_ID · $DISPLAY_BRANCH"
     "$HERDR" workspace rename "$WS_ID" "$LABEL" >/dev/null 2>&1 || true
   fi
 
@@ -634,7 +666,42 @@ if [ "$DOCTOR_ONLY" -eq 0 ]; then
     # for the commands the agent runs -- a draft called that a mechanical rule
     # and it was never once true. Process inheritance reaches the agent, its
     # shells, their children, and the git hooks those children run.
-    "$HERDR" pane run "$PANE_ID" "HEADING_OS_YARD=1 exec $AGENT_CMD" \
+    #
+    # NO `exec`, and that word is the whole reason this comment exists.
+    # `exec` REPLACES the pane's shell with the agent, so the pane holds one
+    # process and no fallback: the moment Claude Code exits for any reason,
+    # nothing is left, herdr hangs the pane up, and the workspace VANISHES from
+    # the sidebar. The yard then looks deleted while its checkout and branch are
+    # untouched on disk.
+    #
+    # MEASURED 2026-09-06, three times in one day, each within 5-14 s of the
+    # operator focusing the workspace to look at it:
+    #     w5H  04:52:48 focus -> 04:52:55 pane exit code 0
+    #     w5N  05:53:30 focus -> 05:53:44 pane exit code 0
+    #     w5Q  06:05:01 focus -> 06:05:06 pane exit code 0
+    # The third he reported directly: he opened the agents view and pressed Esc.
+    # Claude Code exited normally, which is a thing a person is entitled to do,
+    # and `exec` turned an ordinary exit into the loss of the workspace.
+    #
+    # Dropping `exec` costs nothing the marker needs: a `VAR=value command`
+    # prefix exports into that command either way. What it buys is a surviving
+    # shell, so an exit lands the operator on a prompt in the right directory
+    # with the restart printed in front of him.
+    # EXPORTED into the shell, not prefixed onto the command. A `VAR=value cmd`
+    # prefix reaches that one process and nothing else, so the shell left behind
+    # by the exit above carried no marker, and the operator's own
+    # `claude --continue` from that prompt would start an agent the yard guards
+    # cannot see. That is the same defect measured on w5M this morning, arriving
+    # by a different road; the export closes both.
+    #
+    # `--continue` is in the printed hint because the exit the operator actually
+    # performs is Esc in the agents view, and what he wants back is the
+    # CONVERSATION, not a fresh one. It resumes the most recent session IN THE
+    # CURRENT DIRECTORY, which is this checkout, so it cannot pick up a
+    # neighbouring yard's session. The fresh-start form is printed beside it
+    # rather than left to be guessed.
+    "$HERDR" pane run "$PANE_ID" \
+      "export HEADING_OS_YARD=1; $AGENT_CMD; echo; echo 'agent exited. This YARD is intact.'; echo 'Back to the same conversation:  $AGENT_CMD --continue'; echo 'Fresh session instead:         $AGENT_CMD'" \
       >/dev/null 2>&1 \
       || log "could not start the agent; start it by hand: HEADING_OS_YARD=1 $AGENT_CMD"
   fi

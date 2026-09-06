@@ -55,6 +55,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.agent_stub import agent_in
+
 ROOT = Path(__file__).resolve().parent.parent
 SENDER_REL = "scripts/herdr-brief.py"
 GATE_REL = ".claude/hooks/_dispatch.py"
@@ -416,8 +418,13 @@ def test_an_unmarked_brief_still_authorises(tmp_path, monkeypatch):
 # The sender, so the marker is not a promise
 # ==========================================================================
 
-def test_the_sender_prepends_the_marker_and_delegates(helm):
-    result = _run_sender(helm, "w37:p1", "TASK FROM HELM. Do the thing.")
+def test_the_sender_prepends_the_marker_and_delegates(helm, tmp_path):
+    # Since 2026-09-06 the sender refuses a pane with no agent in it, asked of
+    # `/proc`. This test is about the MARKER, so it has to satisfy that
+    # pre-flight; `agent_in` puts a real process there rather than stubbing the
+    # check out, which would be a seam inside the guard.
+    with agent_in(helm["clone"], tmp_path):
+        result = _run_sender(helm, "w37:p1", "TASK FROM HELM. Do the thing.")
     assert result.returncode == 0, result.stdout + result.stderr
     argv = _stub_argv(helm)
     assert argv[:3] == ["agent", "prompt", "w37:p1"], argv
@@ -436,8 +443,9 @@ def test_the_sender_prepends_the_marker_and_delegates(helm):
         f"more than the id line follows the brief: {tail!r}")
 
 
-def test_the_sender_prints_what_it_is_about_to_send(helm):
-    result = _run_sender(helm, "w37:p1", "TASK FROM HELM. Do the thing.")
+def test_the_sender_prints_what_it_is_about_to_send(helm, tmp_path):
+    with agent_in(helm["clone"], tmp_path):     # see the sibling above
+        result = _run_sender(helm, "w37:p1", "TASK FROM HELM. Do the thing.")
     assert EXPECTED_MARKER in result.stdout
     assert "TASK FROM HELM. Do the thing." in result.stdout
     assert "About to send to w37:p1" in result.stdout
@@ -530,7 +538,7 @@ def test_the_marker_is_spelled_once_in_the_engine():
     assert holders[0].startswith(GATE_REL), holders
 
 
-def test_the_sender_reads_the_marker_from_the_gate(helm):
+def test_the_sender_reads_the_marker_from_the_gate(helm, tmp_path):
     """Not a copy: change the gate's constant and the sender follows."""
     gate = helm["clone"] / GATE_REL
     source = gate.read_text(encoding="utf-8")
@@ -539,7 +547,8 @@ def test_the_sender_reads_the_marker_from_the_gate(helm):
     assert patched != source, "the constant assignment was not found to patch"
     gate.write_text(patched, encoding="utf-8")
     try:
-        result = _run_sender(helm, "w37:p1", "TASK FROM HELM. Do the thing.")
+        with agent_in(helm["clone"], tmp_path):   # see the pre-flight note above
+            result = _run_sender(helm, "w37:p1", "TASK FROM HELM. Do the thing.")
         assert result.returncode == 0, result.stdout + result.stderr
         assert _stub_argv(helm)[3].startswith("X-ALTERED: nope")
     finally:

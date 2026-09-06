@@ -88,6 +88,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -180,8 +181,46 @@ def checkout_for_pane(pane: str, workspaces: list) -> Path | None:
             continue
         worktree = entry.get("worktree") or {}
         path = worktree.get("checkout_path")
-        return Path(path) if path else None
+        if path:
+            return Path(path)
+        return agent_cwd(pane)
     return None
+
+
+def agent_cwd(pane: str) -> Path | None:
+    """The working directory of the agent in `pane`, asked of herdr.
+
+    The fallback for a workspace with no `worktree` block. MEASURED 2026-09-06:
+    a yard whose herdr workspace had died was re-attached with
+    `herdr workspace create --cwd <checkout>`, which produces a workspace herdr
+    reports WITHOUT a worktree block. `checkout_path` was then None and this
+    script refused, so a yard with real uncommitted work in it could not be
+    briefed at all -- while `git worktree remove` refused to delete it, which is
+    correct, leaving the checkout reachable by nothing.
+
+    The agent's own cwd is not a weaker answer than the worktree block; it is a
+    better one. `transcript_dir()` derives the slug from a PATH, and the path
+    that decides where this agent writes is the path it is running in.
+
+    Trusting herdr for the cwd does not reopen what this script exists to close.
+    A wrong cwd here sends the delivery check looking in the wrong transcript
+    directory, the brief id is not found, and the run exits 4 naming where it
+    did land. The failure mode is a loud false alarm, never a silent success.
+    """
+    try:
+        result = subprocess.run([HERDR_BIN, "agent", "get", pane],
+                                capture_output=True, text=True,
+                                timeout=PROMPT_TIMEOUT, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        agent = (json.loads(result.stdout).get("result") or {}).get("agent")
+    except ValueError:
+        return None
+    cwd = (agent or {}).get("cwd")
+    return Path(cwd) if cwd else None
 
 
 def herdr_workspaces() -> list:
@@ -207,6 +246,60 @@ def transcripts(project_dir: Path) -> list[Path]:
         return sorted(project_dir.glob("*.jsonl"))
     except OSError:
         return []
+
+
+def live_agent_pids(checkout: Path,
+                    proc_root: Path = Path("/proc")) -> list[int] | None:
+    """PIDs of Claude agents whose working directory IS this checkout.
+
+    The pre-flight below wants one thing: is there an agent in that pane to
+    receive this? Until 2026-09-06 it asked the transcript store instead, and a
+    transcript is a PROXY that is wrong in both directions.
+
+    * A freshly booted agent that has never been prompted writes NO `.jsonl` at
+      all. MEASURED 2026-09-06 on `yard-slug-one-owner`: the agent was up with
+      `HEADING_OS_YARD=1` in its environment and its project directory held only
+      `memory/`. The refusal that follows made the FIRST brief to a new yard
+      impossible, which is the normal case; the one yard it worked for that day
+      had a transcript only because the bootstrap's own start command had landed
+      in it as a stray prompt.
+    * An agent that has EXITED leaves its transcript behind. That is the exact
+      shape of both recorded misdeliveries, and the proxy passes it.
+
+    So the direct question is asked directly. `/proc/<pid>/comm` is `claude` for
+    the agent process (measured; `exec claude` replaces the pane's shell, so the
+    agent inherits the pane pid), and `/proc/<pid>/cwd` is the checkout.
+
+    Returns None, not an empty list, when `/proc` cannot be enumerated at all.
+    The caller must not read "could not look" as "nothing is there": a `None`
+    falls back to the transcript proxy and says so, which is the same
+    fail-toward-over-reporting rule the rest of this script follows. A pid that
+    vanishes mid-scan is skipped, because that is a race and not an answer.
+
+    `proc_root` exists so the tests can drive THIS function over a constructed
+    tree rather than restate its logic in a stub. A stub that agrees with the
+    code proves only that both were written by the same hand.
+    """
+    try:
+        entries = [name for name in os.listdir(proc_root) if name.isdigit()]
+    except OSError:
+        return None
+    try:
+        wanted = checkout.resolve()
+    except OSError:
+        wanted = checkout
+    found: list[int] = []
+    for name in entries:
+        try:
+            if (proc_root / name / "comm").read_text(
+                    encoding="utf-8", errors="replace").strip() != "claude":
+                continue
+            if Path(os.readlink(proc_root / name / "cwd")) != wanted:
+                continue
+        except OSError:
+            continue        # the process exited between listdir and this read
+        found.append(int(name))
+    return found
 
 
 def carries(paths: list[Path], token: str) -> bool:
@@ -368,17 +461,40 @@ def main() -> int:
 
     # The pre-flight. MEASURED twice, 2026-09-05 and 2026-09-06: both
     # misdeliveries were to a pane whose session had never started, and both
-    # times herdr answered with the pane it was given.
-    if not transcripts(target):
+    # times herdr answered with the pane it was given. The question is whether
+    # an agent is THERE NOW, so `live_agent_pids` answers it directly and the
+    # transcript store is consulted only when /proc cannot be read.
+    agents = live_agent_pids(checkout)
+    if agents is None:
+        if not transcripts(target):
+            print(
+                f"{RED}herdr-brief: REFUSED. Cannot establish an agent in "
+                f"{checkout}.{RESET}\n"
+                f"  /proc could not be enumerated here, so the direct check is "
+                f"unavailable and the weaker proxy was used: its Claude project "
+                f"directory ({target}) holds no transcript. Sending anyway is "
+                f"what misdelivers: MEASURED 2026-09-06, a brief addressed to a "
+                f"pane with no agent was answered with a success line naming "
+                f"that pane and arrived in a DIFFERENT yard that had live work "
+                f"in it.\n"
+                f"  Start an agent in that pane first, then send.",
+                file=sys.stderr)
+            return 5
+    elif not agents:
         print(
-            f"{RED}herdr-brief: REFUSED. No agent has ever run in "
+            f"{RED}herdr-brief: REFUSED. No Claude agent is running in "
             f"{checkout}.{RESET}\n"
-            f"  Its Claude project directory ({target}) holds no transcript, so "
-            f"the pane has no session to receive this. Sending anyway is what "
-            f"misdelivers: MEASURED 2026-09-06, a brief addressed to a pane in "
-            f"exactly this state was answered with a success line naming that "
-            f"pane and arrived in a DIFFERENT yard that had live work in it.\n"
-            f"  Start an agent in that pane first, then send.",
+            f"  No process named `claude` has that directory as its working "
+            f"directory, so the pane has nothing to receive this. A transcript "
+            f"in {target} would not change that: an agent that has EXITED "
+            f"leaves one behind, and that is the shape of both recorded "
+            f"misdeliveries.\n"
+            # No `exec` in the hint. It replaces the pane's shell, so the next
+            # ordinary agent exit takes the whole workspace with it; measured
+            # three times on 2026-09-06 (see yard-bootstrap.sh step 11).
+            f"  Start an agent in that pane first, then send: "
+            f"`herdr pane run <ws>:p1 "
+            f"\"HEADING_OS_YARD=1 claude --dangerously-skip-permissions\"`.",
             file=sys.stderr)
         return 5
 

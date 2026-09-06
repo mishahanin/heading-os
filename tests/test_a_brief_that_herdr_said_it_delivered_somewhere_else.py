@@ -46,6 +46,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.agent_stub import agent_in
+
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts/herdr-brief.py"
 
@@ -177,7 +179,11 @@ def test_a_pane_whose_session_never_started_is_refused(tmp_path):
     assert not record.exists(), (
         "the brief was handed to herdr anyway, so the refusal is a message "
         "rather than a guard")
-    assert "No agent has ever run" in result.stderr
+    # No process is running in this fixture checkout, so the DIRECT check is
+    # what refuses. Before 2026-09-06 the absent transcript did, and the wording
+    # was "No agent has ever run" -- a claim about history that the method never
+    # established. The present tense is the one the evidence supports.
+    assert "No Claude agent is running" in result.stderr
 
 
 # ============================================================
@@ -200,7 +206,8 @@ def test_delivery_that_never_arrives_fails_loudly(tmp_path):
     checkout, projects, _ = _prepared(tmp_path)
     record = tmp_path / "delivered.txt"
 
-    result = _run(_fake_herdr(tmp_path, checkout, record), projects)
+    with agent_in(checkout, tmp_path):
+        result = _run(_fake_herdr(tmp_path, checkout, record), projects)
 
     assert record.exists(), "the brief was never handed to herdr at all"
     assert result.returncode == 4, (
@@ -221,7 +228,8 @@ def test_delivery_that_lands_in_another_yard_names_that_yard(tmp_path):
     stray.mkdir()
     bindir = _fake_herdr(tmp_path, checkout, stray / "session.jsonl")
 
-    result = _run(bindir, projects)
+    with agent_in(checkout, tmp_path):
+        result = _run(bindir, projects)
 
     assert result.returncode == 4
     assert "-some-other-yard" in result.stderr, (
@@ -236,7 +244,8 @@ def test_a_delivery_that_does_arrive_succeeds(tmp_path):
     checkout, projects, target = _prepared(tmp_path)
     bindir = _fake_herdr(tmp_path, checkout, target / "session.jsonl")
 
-    result = _run(bindir, projects)
+    with agent_in(checkout, tmp_path):
+        result = _run(bindir, projects)
 
     assert result.returncode == 0, (
         f"a brief that reached the addressed session was reported as a "
@@ -259,7 +268,8 @@ def test_each_brief_carries_a_fresh_id(tmp_path, brief):
     seen = set()
     for _ in range(2):
         record = target / "session.jsonl"
-        _run(_fake_herdr(tmp_path, checkout, record), projects, "SAME TEXT")
+        with agent_in(checkout, tmp_path):
+            _run(_fake_herdr(tmp_path, checkout, record), projects, "SAME TEXT")
         body = record.read_text(encoding="utf-8")
         line = [l for l in body.splitlines()
                 if l.startswith(brief.BRIEF_ID_PREFIX)]

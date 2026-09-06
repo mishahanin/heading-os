@@ -162,6 +162,20 @@ DECLARED_CLAIMANTS: dict[str, dict[str, tuple[str, str]]] = {
             "is refused. this wall reads `last-prompt` from the session transcript to",
             "_last_operator_prompt"),
     },
+    # `herdr-brief` refuses to send into a pane with no agent, and the refusal
+    # states the pane's LIVE state. Until 2026-09-06 it said "No agent has ever
+    # run in <checkout>" on the strength of an absent transcript, which is a
+    # claim about HISTORY that the method never established and which was wrong
+    # in both directions: a booted agent writes no transcript until it is
+    # prompted, and an exited one leaves its transcript behind. `live_agent_pids`
+    # resolves the sentence the wall actually needs, by asking `/proc` for a
+    # process whose working directory IS that checkout, and the wording moved to
+    # the present tense to match what the read supports.
+    "scripts/herdr-brief.py": {
+        "f45641966d20": (  # pragma: allowlist secret
+            "herdr-brief: refused. no claude agent is running in",
+            "live_agent_pids"),
+    },
     # The checkpoint system says "this session" a great deal, and until
     # 2026-08-16 it was not entitled to: one shared pointer and one shared state
     # file for the whole workspace meant the handoff it injected could belong to

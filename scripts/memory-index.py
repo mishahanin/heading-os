@@ -73,7 +73,13 @@ from scripts.utils.ollama_host import (
     resolve_ollama_host,
     resolve_pinned_host as _resolve_embed_host,
 )
-from scripts.utils.workspace import get_classification, get_data_root, get_workspace_root, load_env
+from scripts.utils.workspace import (
+    get_classification,
+    get_data_root,
+    get_datastore_dir,
+    get_workspace_root,
+    load_env,
+)
 
 # ============================================================
 # Configuration
@@ -174,6 +180,10 @@ def load_config(root: Path, *, allow_fallback: bool = False) -> dict:
             cfg["host_error"] = str(exc)
             sys.stderr.write(embedder_down_banner(str(exc)))
     cfg.setdefault("threshold", 0.55)
+    # The calibrated cut, if a calibration run has recorded one. Kept under its
+    # OWN key so `cfg["threshold"]` remains the value this repository ships and
+    # `tests/test_per_layer_threshold.py` keeps asserting the shipped file.
+    cfg["calibrated_threshold"] = calibrated_threshold()
     cfg.setdefault("near_miss_margin", 0.12)
     cfg.setdefault("top_k", 8)
     cfg.setdefault("layers", [])
@@ -1570,6 +1580,51 @@ def _should_touch(args, near_miss: bool) -> bool:
     return bool(getattr(args, "touch", False)) and not near_miss
 
 
+CALIBRATION_SUBDIR = "operations/memory-calibration"
+CALIBRATION_NAME = "current.json"
+# A calibrated cut outside this range is not a calibration, it is a corrupt or
+# mis-scaled file. Cosine over a normalised embedding lives in [0, 1], and a cut
+# at either end turns recall into "everything is confident" or "nothing is".
+CALIBRATION_FLOOR, CALIBRATION_CEILING = 0.20, 0.90
+
+
+def calibrated_threshold():
+    """The cut a calibration run recorded, or None.
+
+    It lives in the DATA overlay rather than in `config/memory-index.yaml`, and
+    that placement is the whole design:
+
+    * a weekly job writing into a TRACKED engine file dirties the working tree,
+      trips the push gates, and puts a machine-derived number into a public
+      repository;
+    * a gitignored ENGINE file would be invisible in every worktree, which is the
+      defect fixed on 2026-09-06 for the embedder pin -- repeating it here would
+      mean the calibrated cut applied in HELM and silently did not in any yard;
+    * the threshold is a function of the CORPUS, and the corpus is the overlay.
+      Every yard reaches the overlay through the data-root helpers by design.
+
+    A public clone with no overlay simply gets None and the shipped value, which
+    is the same behaviour it has today.
+
+    Fails safe in the quiet direction: anything unreadable, unparseable or out of
+    range returns None, so recall falls back to the number this repository ships
+    rather than to a value nobody can account for.
+    """
+    try:
+        path = get_datastore_dir() / CALIBRATION_SUBDIR / CALIBRATION_NAME
+        with open(path, encoding="utf-8") as fh:
+            value = float((json.load(fh) or {}).get("threshold"))
+    except (OSError, UnicodeDecodeError, ValueError, TypeError,
+            json.JSONDecodeError):
+        return None
+    if not CALIBRATION_FLOOR <= value <= CALIBRATION_CEILING:
+        sys.stderr.write(
+            f"memory-index: ignoring calibrated threshold {value} outside "
+            f"[{CALIBRATION_FLOOR}, {CALIBRATION_CEILING}]\n")
+        return None
+    return value
+
+
 def resolve_threshold(cfg, cli_threshold, allowed):
     """The confidence cut for one query: CLI value, else per-layer, else global.
 
@@ -1597,7 +1652,14 @@ def resolve_threshold(cfg, cli_threshold, allowed):
     """
     if cli_threshold is not None:
         return cli_threshold
-    threshold = cfg["threshold"]
+    # The calibrated global cut, when one exists, stands in for the shipped
+    # global cut and for nothing else. A layer that carries its OWN measured cut
+    # (the commit layers, 0.45 on a 25-query set) still wins below: that number
+    # was measured on a different register and a corpus-wide calibration of the
+    # prose cut says nothing about it.
+    threshold = cfg.get("calibrated_threshold")
+    if threshold is None:
+        threshold = cfg["threshold"]
     if allowed and len(allowed) == 1:
         only = next(iter(allowed))
         per_layer = next(
@@ -1774,10 +1836,43 @@ def cmd_query(args) -> int:
     path_ids = all_path
     combined_sparse = list(dict.fromkeys(path_ids + sparse_ids))
 
+    # A PATH-ONLY match is a lead, never a confident answer.
+    #
+    # `_path_match_ids` is admitted without the convergence gate on purpose, so a
+    # query naming a folder or a client finds the file even when its body is
+    # semantically unrelated. That is the right candidate rule and is unchanged.
+    # What was wrong is that its presence in `combined_sparse` also SUPPRESSED
+    # this branch, so the payload went out with no `near_miss` key and every
+    # consumer read it as confident.
+    #
+    # MEASURED 2026-09-06 at the shipped threshold, `who runs our beekeeping
+    # operation` (nothing in the corpus is about beekeeping):
+    #
+    #     gap False   near_miss None   confident None
+    #     0.3957  auto-memory/a-yards-agent-runs-as-a-background-session.md
+    #     0.3963  auto-memory/a-systemd-timer-runs-a-narrower-suite-than-your-shell.md
+    #     0.3775  auto-memory/a-help-probe-runs-a-script-that-has-no-help.md
+    #
+    # All five returned rows shared exactly one token with the question: `runs`.
+    # Across eight such controls, five came back confident this way. It lands in
+    # `.claude/hooks/recall-inject.py`, which reads `near_miss` and nothing else,
+    # so the block was headed "Memory relevant to this message" 726 times a month.
+    #
+    # `PATH_TOKEN_DF_CAP` cannot separate these: `runs` is under the cap. Nor can
+    # the ordinary-English floor of `scripts/utils/content_denylist.py`, tried and
+    # rejected here on 2026-09-06 -- `is_ordinary_english` returns True for
+    # `meridian`, `syria` and `patagonia`, so it would delete the channel's own
+    # worked example. It is a dictionary of the language, not a test for a name.
+    #
+    # So the fix is at the CONFIDENCE boundary rather than the candidate rule:
+    # `sparse_ids` still confers confidence, because BM25 is floored at
+    # `threshold - SPARSE_COS_MARGIN` and is genuine convergence; `path_ids`
+    # alone does not. The file still surfaces, flagged, which is what a filename
+    # match honestly is.
     near_miss = False
-    if not dense_ids and not combined_sparse:
+    if not dense_ids and not sparse_ids:
         near_ids = sorted(all_near, key=lambda i: cos_by_id.get(i, 0.0), reverse=True)
-        if not near_ids:
+        if not near_ids and not path_ids:
             best_val = best if best is not None else 0.0
             if want_json:
                 payload = {"hits": [], "gap": True, "best": round(best_val, 4),

@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# Install the weekly recall-threshold calibration as a systemd-user timer on Linux/WSL2.
+#
+# Usage:
+#   scripts/install-recall-calibration-timer.sh
+#   HEADING_OS_TZ=America/New_York scripts/install-recall-calibration-timer.sh   # pin a TZ
+#   scripts/install-recall-calibration-timer.sh --uninstall                      # remove it
+#
+# Renders scripts/templates/systemd/recall-calibration.{service,timer} (substituting
+# {{WORKSPACE}}, {{PYTHON}}, {{TZ}}) into ~/.config/systemd/user/, then enables the
+# weekly timer. It fires Sunday 04:20 in the configured timezone (HEADING_OS_TZ,
+# default UTC) and runs `scripts/recall-calibration.py check`, which prices the
+# confidence cut on both sides against a fixed gold set and a set of nonsense
+# controls, writes a dated record plus a trend line into the DATA overlay, and
+# adopts a new cut ONLY inside a bounded envelope: within 0.10 of the shipped
+# value, and only when the candidate beats it on correct answers without costing
+# any extra false confidence. Outside that it changes nothing and leaves a named
+# proposal in `pending.json` for the operator.
+#
+# Why weekly rather than nightly: the input is the corpus, and the corpus moves
+# on a scale of weeks (2,175 to 5,180 indexed files in thirty days, while the cut
+# stayed where it was calibrated). A nightly run would spend six minutes of
+# embedder time to watch a number that had not moved.
+#
+# This is a STANDALONE installer mirroring install-router-accuracy-timer.sh's
+# template+sed render convention. The timezone is read from the environment (no
+# hardcoded locale), so the templates carry no geographic signal and ship in the
+# public engine.
+#
+# For unattended boot:  loginctl enable-linger "$USER"  (done automatically below)
+
+set -euo pipefail
+
+# HELM only. The systemd unit templates substitute the workspace path into
+# WorkingDirectory= and ExecStart=, so running this from a YARD worktree
+# points a LIVE daemon at a checkout that is deleted two days later.
+source "$(dirname "$0")/lib/require-main-clone.sh"
+require_main_clone
+
+# Workspace root = directory containing this script's parent (i.e. scripts/../).
+WORKSPACE="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Honor PYTHON env override so callers can point at a venv interpreter.
+PYTHON="${PYTHON:-$(command -v python3 || command -v python || true)}"
+
+# Unit timezone: resolved through the workspace resolver rather than read from
+# the environment alone. HEADING_OS_TZ lives in the gitignored .env and is
+# exported by nothing, so an environment-only read renders UTC on a machine
+# whose timezone is correctly configured. An explicit HEADING_OS_TZ=X still wins.
+# Invoked as a MODULE, from the workspace root. Running the file directly puts
+# scripts/utils/ on sys.path[0], where operator.py shadows the stdlib operator
+# that collections imports -- measured fatal on Python 3.12 (the service host)
+# and silently fine on 3.11 (the laptop), so the || echo UTC fallback below was
+# swallowing it as a plain "no timezone configured".
+TZ_VALUE="${HEADING_OS_TZ:-$(cd "$WORKSPACE" && "$PYTHON" -m scripts.utils.paths tz || echo UTC)}"
+
+TEMPLATE_DIR="$WORKSPACE/scripts/templates/systemd"
+DEST_DIR="$HOME/.config/systemd/user"
+
+if ! command -v systemctl >/dev/null 2>&1; then
+    echo "systemctl not found - systemd user units require systemd >= 226." >&2
+    echo "On WSL2 enable systemd via /etc/wsl.conf:" >&2
+    echo "  [boot]" >&2
+    echo "  systemd=true" >&2
+    exit 5
+fi
+
+# Uninstall path: disable + remove the units, then reload.
+if [[ "${1:-}" == "--uninstall" || "${1:-}" == "uninstall" ]]; then
+    systemctl --user disable --now recall-calibration.timer 2>/dev/null || true
+    rm -f "$DEST_DIR/recall-calibration.service" "$DEST_DIR/recall-calibration.timer"
+    systemctl --user daemon-reload 2>/dev/null || true
+    echo "  [ok] recall-calibration.timer uninstalled."
+    exit 0
+fi
+
+if [[ -z "$PYTHON" ]]; then
+    echo "No python3 (or python) on PATH" >&2
+    exit 4
+fi
+for unit in recall-calibration.service recall-calibration.timer; do
+    if [[ ! -f "$TEMPLATE_DIR/$unit" ]]; then
+        echo "Template not found: $TEMPLATE_DIR/$unit" >&2
+        exit 3
+    fi
+done
+
+mkdir -p "$DEST_DIR"
+
+# Render both units with portable sed. Pipe markers chosen because the paths may
+# contain forward slashes.
+for unit in recall-calibration.service recall-calibration.timer; do
+    sed -e "s|{{WORKSPACE}}|${WORKSPACE}|g" \
+        -e "s|{{PYTHON}}|${PYTHON}|g" \
+        -e "s|{{TZ}}|${TZ_VALUE}|g" \
+        "$TEMPLATE_DIR/$unit" > "$DEST_DIR/$unit"
+done
+
+# Validate the calendar expression before enabling (catches a too-old systemd that
+# rejects the trailing timezone, rather than failing opaquely at enable).
+if ! systemd-analyze calendar "Sun *-*-* 04:20:00 ${TZ_VALUE}" >/dev/null 2>&1; then
+    echo "[warn] this systemd rejects a timezone-suffixed OnCalendar." >&2
+    echo "       Edit $DEST_DIR/recall-calibration.timer to 'OnCalendar=Sun *-*-* 04:20' and" >&2
+    echo "       set the host timezone to ${TZ_VALUE}, then re-run." >&2
+    exit 6
+fi
+
+systemctl --user daemon-reload
+systemctl --user enable --now recall-calibration.timer
+
+# Belt-and-braces for unattended firing (the bridge daemon already holds WSL up).
+if ! loginctl show-user "$USER" 2>/dev/null | grep -q '^Linger=yes'; then
+    loginctl enable-linger "$USER" 2>/dev/null \
+        || echo "  [hint] run once for unattended boot: loginctl enable-linger $USER"
+fi
+
+echo "  [ok] systemd user timer installed and enabled: recall-calibration.timer"
+echo ""
+echo "  Next fire:"
+systemctl --user list-timers recall-calibration.timer --no-pager || true
+echo ""
+echo "  Status:  systemctl --user status recall-calibration.timer"
+echo "  Logs:    journalctl --user -u recall-calibration.service -f"
+echo "  Test:    python3 scripts/recall-calibration.py measure --dry-run"
+echo "  Remove:  scripts/install-recall-calibration-timer.sh --uninstall"

@@ -881,6 +881,16 @@ _PROBE_PLAN = {
     "ollama-guard.py": (["check"], False),
     "ops-radar-notify.py": ([], False),
     "reminders-notify.py": ([], True),
+    # Every stamp it writes is `datetime.now(timezone.utc)` with the zone named
+    # explicitly, so it reaches no LOCAL zone and the answer is False rather than
+    # "reads it late". It still calls `load_env` first, because the data root its
+    # records land in is resolved from `.env` and a systemd unit passes none.
+    # The argv is the cheapest deterministic path through the entrypoint: the
+    # scratch data root this fixture builds holds no question set, so the script
+    # exits 2 naming the missing file before it issues a single query. A probe
+    # must not spend six minutes and 110 embedder calls, and there is no --help
+    # shortcut worth trusting here.
+    "recall-calibration.py": (["measure", "--dry-run", "--grid", "0.55"], False),
     "router-accuracy-nightly.py": (["--dry-run"], False),
     "update-manager.py": (["check"], False),
 }

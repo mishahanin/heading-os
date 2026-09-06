@@ -56,6 +56,7 @@ GUARDED = (
     "install-ollama-guard-timer.sh",
     "install-ops-radar-timer.sh",
     "install-reminders-timer.sh",
+    "install-recall-calibration-timer.sh",
     "install-router-accuracy-timer.sh",
     "install-update-manager-timer.sh",
     "restart-daemon-service.sh",
@@ -103,8 +104,12 @@ def test_the_guarded_corpus_is_the_size_it_was_measured_at():
     20 since 2026-09-05, when `install-nightly-refresh-timer.sh` landed. It
     renders a unit substituting the workspace path, so a run from a YARD would
     point the nightly at a checkout that is deleted two days later.
+
+    21 since 2026-09-06, when `install-recall-calibration-timer.sh` landed, for
+    the same reason: its unit carries `WorkingDirectory={{WORKSPACE}}`, so a yard
+    install would point a weekly job at a tree that is gone by the next fire.
     """
-    assert len(GUARDED) == 20
+    assert len(GUARDED) == 21
     assert len(UNGUARDED_BY_DECISION) == 1
     for name in (*GUARDED, *UNGUARDED_BY_DECISION):
         assert (SCRIPTS / name).is_file(), f"{name} is not in scripts/ any more"

@@ -508,10 +508,28 @@ def publish_state(engine_root: Path) -> dict:
 # ============================================================
 
 def classify_odin(cadence: dict) -> dict:
-    """Pure: odin-cadence.py --json result -> signal dict."""
+    """Pure: odin-cadence.py --json result -> signal dict.
+
+    `0 clusters` used to be the whole sentence, and it is two different states
+    wearing one number. `analyze_reflect_clusters` skips a component either
+    because fewer than two raw episodes share enough tags to form one, or
+    because every member predates `.last-reflect` and the CEO has already looked
+    at it. Both `continue` statements land on the same 0. The first says the
+    brain has nothing to reflect on; the second says the reflect side is CURRENT,
+    which is the good outcome and read, daily, as the empty one. MEASURED
+    2026-09-06: two clusters of three episodes each existed, were reviewed on
+    2026-08-11, were deliberately not graduated, and the radar row said
+    `0 clusters` for twenty-six days.
+
+    `reviewed_clusters` is read with `.get` returning None rather than 0, and
+    the parenthetical is omitted when it is None. A cadence dict produced before
+    2026-09-06 does not carry the field, and rendering `(0 reviewed)` for it
+    would assert something this function never established.
+    """
     nudge = bool(cadence.get("nudge"))
     total = cadence.get("unharvested_total", 0)
     clusters = cadence.get("reflect_clusters", 0)
+    reviewed = cadence.get("reviewed_clusters")
     stale = cadence.get("stale_clusters", 0)
     if stale >= 1:
         severity = "high"
@@ -519,17 +537,23 @@ def classify_odin(cadence: dict) -> dict:
         severity = "warn"
     else:
         severity = "ok"
+    if clusters:
+        qualifier = f" ({stale} stale)" if stale else ""
+    elif reviewed is None:
+        qualifier = ""
+    elif reviewed:
+        qualifier = f" ({reviewed} reviewed, none new)"
+    else:
+        qualifier = " (none formed)"
     return {
         "key": "odin_cadence",
-        "value": {"unharvested": total, "clusters": clusters, "stale": stale},
+        "value": {"unharvested": total, "clusters": clusters,
+                  "reviewed": reviewed, "stale": stale},
         "threshold": cadence.get("min_entries", 0),
         "due": nudge,
         "severity": severity,
         "tier": "B",
-        "summary": (
-            f"odin: {total} un-harvested, {clusters} clusters"
-            + (f" ({stale} stale)" if stale else "")
-        ),
+        "summary": f"odin: {total} un-harvested, {clusters} clusters{qualifier}",
     }
 
 

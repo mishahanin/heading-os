@@ -65,7 +65,7 @@ move.
 | Memory hygiene | `memory-hygiene.{service,timer}` | Mon 07:34 | `install-memory-hygiene-timer.sh` |
 | Memory index refresh | `memory-index-refresh.{service,timer}` | daily 03:30 | `install-memory-index-timer.sh` |
 | Nightly refresh | `nightly-refresh.{service,timer}` | daily 01:30 | `install-nightly-refresh-timer.sh` |
-| Odin cadence nudge | `odin-cadence.{service,timer}` | Mon 09:00 | `install-odin-cadence-timer.sh` |
+| Odin cadence nudge | `odin-cadence.{service,timer}` | **RETIRED 2026-06-26, not enabled** (unit declares Mon 09:00) | `install-odin-cadence-timer.sh` (renders, then `disable --now`) |
 | Odin skill proposals | `odin-propose.{service,timer}` | Mon 05:31 | `install-odin-propose-timer.sh` |
 | Ollama guard | `ollama-guard.{service,timer}` | every 5 min (2 min after boot) | `install-ollama-guard-timer.sh` |
 | Ops radar | `ops-radar.{service,timer}` | daily 08:00 | `install-ops-radar-timer.sh` |
@@ -73,6 +73,18 @@ move.
 | Recall calibration | `recall-calibration.{service,timer}` | weekly Sun 04:20 | `install-recall-calibration-timer.sh` |
 | Router accuracy | `router-accuracy.{service,timer}` | daily 03:00 | `install-router-accuracy-timer.sh` |
 | Update manager | `update-manager.{service,timer}` | daily 07:00 | `install-update-manager-timer.sh` |
+
+`odin-cadence.timer` is rendered but never enabled. `install-odin-cadence-timer.sh`
+disables it on every run, because `ops-radar` already folds the Odin
+collect/reflect signal into its daily 08:00 push and enabling both double-pings
+Telegram (ops-radar Decision 2; `CHANGELOG.md` [0.4.1], disabled since
+2026-06-26). It is listed above rather than deleted because the SERVICE is still
+the manual entry point (`python3 scripts/odin-cadence-notify.py`), and because a
+row that vanishes teaches nobody why. Until 2026-09-06 this table showed it with
+a bare `Mon 09:00` and no retirement marker anywhere in the file, so the one
+document that enumerates the units disagreed with the installer that writes them.
+The live Monday unit is `odin-propose.timer` at 05:31, which is a different unit
+doing a different job.
 
 `ollama-guard.timer` is the one unit here with NO `Persistent=true`, and that is
 deliberate: it is a watchdog probe of the CURRENT state, so replaying a missed

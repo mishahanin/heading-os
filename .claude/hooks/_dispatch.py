@@ -2896,6 +2896,24 @@ _PUSH_WORDS = (
 )
 _COMMIT_WORDS = (
     "commit", "коммит", "закоммить", "зафиксируй",
+    # A MERGE word authorises the commit it needs, and only that. MEASURED
+    # 2026-09-06: the operator typed `merge`, then `merge` again, and both times
+    # this wall refused, because the one verb `CLAUDE.md` names as HELM's own
+    # duty, beside the commit and the push, was absent from its vocabulary.
+    # A wall whose word list cannot express the cycle it guards teaches the
+    # operator to type a different word than the one they mean, which is the
+    # same defect the per-action split above was written to remove.
+    #
+    # In `_COMMIT_WORDS` and deliberately NOT in `_PUSH_WORDS`: a merge is
+    # local, and nothing about asking for one asks for the result to leave the
+    # machine.
+    #
+    # Both spellings of the Russian root, because the match is a substring and
+    # `ё` is a different character: "мерж" catches "смержить", "мёрж" catches
+    # "смёржить", and the operator writes both. Blunt in the same direction as
+    # the rest of this list: "fix the merge conflict" now authorises a commit,
+    # exactly as "check the commit" already did.
+    "merge", "мерж", "мёрж",
 )
 
 # PER ACTION, since 2026-09-03. These were one list, and any entry refused the
@@ -2916,6 +2934,11 @@ _PUSH_NEGATIONS = (
 _COMMIT_NEGATIONS = (
     "не коммить", "не комить", "без коммита",
     "don't commit", "dont commit", "do not commit", "no commit",
+    # The refusing half of the merge words above. A permission word that has no
+    # negation beside it cannot be withdrawn in the same sentence it is granted,
+    # and the operator writes "merge but don't commit anything else" constantly.
+    "не мерж", "не мёрж", "без мержа", "без мёржа",
+    "don't merge", "dont merge", "do not merge", "no merge",
 )
 
 # A prohibition said in words the lists above do not enumerate. MEASURED

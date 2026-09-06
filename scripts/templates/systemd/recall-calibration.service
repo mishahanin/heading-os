@@ -1,0 +1,22 @@
+[Unit]
+Description=HEADING OS weekly recall-threshold calibration (gold set + nonsense controls -> data-overlay record)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{WORKSPACE}}
+ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/recall-calibration.py check
+# Roughly 110 queries against the local embedder, about six minutes on this
+# machine under load. It writes ONLY into the data overlay: a dated grid record,
+# a trend line, and either `current.json` (a cut adopted inside the envelope) or
+# `pending.json` (a proposal the operator has to weigh). It never edits the
+# engine tree, so it cannot dirty a working copy or trip a push gate.
+#
+# TZ pins the record's date to the configured timezone regardless of the host.
+# The job exits 0 when it changes nothing, which is the ordinary outcome; a
+# non-zero exit means the grid could not be measured at all (an embedder that
+# does not answer, or a gold answer path that has moved) and surfaces as failed.
+Environment=TZ={{TZ}}
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal

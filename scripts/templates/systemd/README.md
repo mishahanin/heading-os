@@ -70,6 +70,7 @@ move.
 | Ollama guard | `ollama-guard.{service,timer}` | every 5 min (2 min after boot) | `install-ollama-guard-timer.sh` |
 | Ops radar | `ops-radar.{service,timer}` | daily 08:00 | `install-ops-radar-timer.sh` |
 | Reminders | `reminders.{service,timer}` | daily 07:45 | `install-reminders-timer.sh` |
+| Recall calibration | `recall-calibration.{service,timer}` | weekly Sun 04:20 | `install-recall-calibration-timer.sh` |
 | Router accuracy | `router-accuracy.{service,timer}` | daily 03:00 | `install-router-accuracy-timer.sh` |
 | Update manager | `update-manager.{service,timer}` | daily 07:00 | `install-update-manager-timer.sh` |
 

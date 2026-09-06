@@ -48,6 +48,7 @@ from scripts.utils.workspace import (  # noqa: E402
     get_datastore_dir,
     get_outputs_dir,
     get_workspace_root,
+    load_env,
 )
 
 # Resolved through the data-root seam, never spelled as a literal against the
@@ -57,10 +58,28 @@ EVAL_SUBDIR = "operations/memory-eval"
 GOLD_NAME = "2026-09-06_recall-gold-set.json"
 NEGATIVE_NAME = "2026-09-06_recall-negative-controls.json"
 RECORD_SUBDIR = "operations/memory-calibration"
+CURRENT_NAME = "current.json"
+PENDING_NAME = "pending.json"
+
+# The auto-apply envelope. A job may move the cut by itself only inside this,
+# and the shape is a STRICT PARETO improvement rather than "the best score":
+# a rule that only maximises benefit always says "lower it", which is how a
+# threshold ends up admitting confident answers to unanswerable questions.
+#
+# Outside the envelope the job changes nothing, records the measurement, and
+# leaves a named proposal for the operator. That boundary is the same one the
+# workspace draws everywhere else: a job may act inside a measured envelope
+# and must escalate outside it.
+ENVELOPE = 0.10
 
 DEFAULT_GRID = (0.40, 0.45, 0.50, 0.55)
 DEFAULT_TOP_K = 5
 QUERY_TIMEOUT = 120
+
+# Filled by `cmd_measure` so `cmd_check` can act on the same rows it printed,
+# instead of measuring the corpus a second time and deciding on a third set
+# of numbers.
+_LAST_ROWS: list[dict] = []
 
 
 # ============================================================
@@ -274,6 +293,7 @@ def cmd_measure(args) -> int:
         rows.append(measure_threshold(root, gold, negatives, t, args.top_k,
                                       args.collection))
 
+    _LAST_ROWS[:] = rows
     chosen, why = recommend(rows)
     record = {
         "measured": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -302,10 +322,7 @@ def cmd_measure(args) -> int:
         out_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         target = out_dir / f"{stamp}_threshold-grid.json"
-        tmp = target.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(record, ensure_ascii=False, indent=2),
-                       encoding="utf-8")
-        tmp.replace(target)
+        _atomic(target, record)
         with open(out_dir / "trend.jsonl", "a", encoding="utf-8") as fh:
             fh.write(json.dumps({
                 "measured": record["measured"],
@@ -317,6 +334,88 @@ def cmd_measure(args) -> int:
         sys.stderr.write(f"{GREEN}recorded{RESET} {target}\n")
 
     return 0
+
+
+def _shipped_threshold(root: Path) -> float:
+    """The cut this repository ships, read from the tracked config.
+
+    Read rather than hardcoded: a constant here would be a second copy of the
+    number, and the pair would drift the first time one of them moved.
+    """
+    import yaml
+    with open(root / "config" / "memory-index.yaml", encoding="utf-8") as fh:
+        return float((yaml.safe_load(fh) or {}).get("threshold", 0.55))
+
+
+def decide(rows: list[dict], shipped: float) -> tuple[float | None, str]:
+    """The candidate this job may adopt by itself, or None with the reason.
+
+    Pure, so the envelope can be tested without measuring anything.
+    """
+    incumbent = next((r for r in rows if abs(r["threshold"] - shipped) < 1e-9), None)
+    if incumbent is None:
+        return None, f"the grid did not include the shipped cut {shipped}"
+    if any(r["errors"] for r in rows):
+        return None, "at least one query errored, so the grid is incomplete"
+
+    better = [
+        r for r in rows
+        if abs(r["threshold"] - shipped) <= ENVELOPE + 1e-9
+        and r["false_confident"] <= incumbent["false_confident"]
+        and r["lexical_confident"] <= incumbent["lexical_confident"]
+        and r["confident_correct"] > incumbent["confident_correct"]
+    ]
+    if not better:
+        return None, (
+            f"no cut within {ENVELOPE} of {shipped} improves on it without "
+            f"costing more false confidence")
+    best = max(better, key=lambda r: (r["confident_correct"], r["threshold"]))
+    return best["threshold"], (
+        f"{best['confident_correct']}/{best['questions']} confident and correct "
+        f"against the incumbent's {incumbent['confident_correct']}, at no extra "
+        f"false-confident cost")
+
+
+def cmd_check(args) -> int:
+    """The scheduled half. Measure, then act only inside the envelope."""
+    root = get_workspace_root()
+    shipped = _shipped_threshold(root)
+    args.grid = args.grid or ",".join(f"{shipped + d:.2f}"
+                                      for d in (-0.10, -0.05, 0.0, 0.05))
+    args.dry_run = False
+    rc = cmd_measure(args)
+    if rc != 0:
+        return rc
+
+    rows = _LAST_ROWS[:]
+    chosen, why = decide(rows, shipped)
+    out_dir = get_datastore_dir() / RECORD_SUBDIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if chosen is None or abs(chosen - shipped) < 1e-9:
+        _atomic(out_dir / PENDING_NAME, {
+            "measured": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "shipped": shipped, "proposed": chosen, "reason": why,
+        })
+        print(f"{YELLOW}no change:{RESET} {why}")
+        return 0
+
+    _atomic(out_dir / CURRENT_NAME, {
+        "threshold": chosen,
+        "measured": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "shipped": shipped,
+        "reason": why,
+        "envelope": ENVELOPE,
+    })
+    print(f"{GREEN}applied{RESET} threshold {chosen} ({why})")
+    return 0
+
+
+def _atomic(target: Path, payload: dict) -> None:
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                   encoding="utf-8")
+    tmp.replace(target)
 
 
 def main(argv=None) -> int:
@@ -333,7 +432,23 @@ def main(argv=None) -> int:
     m.add_argument("--json", action="store_true")
     m.set_defaults(func=cmd_measure)
 
+    c = sub.add_parser("check", help="the scheduled run: measure, then apply "
+                                     "only inside the envelope")
+    c.add_argument("--questions")
+    c.add_argument("--negatives")
+    c.add_argument("--grid", default=None,
+                   help="default: the shipped cut and three neighbours")
+    c.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
+    c.add_argument("--collection", default="content")
+    c.add_argument("--json", action="store_true")
+    c.set_defaults(func=cmd_check)
+
     args = ap.parse_args(argv)
+    # Before any data-root resolution. A systemd unit passes no environment,
+    # and `HEADING_OS_DATA` lives in the gitignored `.env`; without this the
+    # weekly run would resolve a different overlay than the operator's and
+    # record its calibration where nothing reads it.
+    load_env()
     return args.func(args)
 
 

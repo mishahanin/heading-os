@@ -1,0 +1,19 @@
+[Unit]
+Description=Weekly HEADING OS recall-threshold calibration (Sunday 04:20, configured timezone)
+
+[Timer]
+# WEEKLY, not nightly. The input is the corpus, which grew from 2,175 to 5,180
+# indexed files in thirty days; a cut calibrated once against a corpus that
+# doubles every five weeks is wrong most of the time. Measuring it nightly would
+# spend six minutes of embedder time to watch a number that moves over weeks.
+# Sunday 04:20 sits clear of the 03:00 nightly siblings.
+#
+# The installer substitutes {{TZ}} from HEADING_OS_TZ (default UTC); the trailing
+# timezone pins the fire even when the host's local timezone differs
+# (systemd >= 252). Persistent=true catches a fire missed because the host was
+# off, running it on next boot.
+OnCalendar=Sun *-*-* 04:20:00 {{TZ}}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -16,9 +16,24 @@ from the workspace root" stays armed in demo mode and reports clean.
 
 Both directions are asserted. A check that warned in HELM too would put a
 scary banner on every ordinary session and be deleted within the week.
+
+THE ENVIRONMENT IS PINNED, and that is not decoration. `check_yard_marker`, a
+SECOND and unrelated alert in the same hook, fires on a worktree whose session
+carries no `HEADING_OS_YARD`, and it reads the variable out of the hook's own
+process. Until 2026-09-06 `_run` inherited the suite's environment and the
+assertions here matched the bare word "YARD", so the outcome depended on where
+the suite ran: green in a yard, where the bootstrap exports the marker, and RED
+in HELM, where nothing does. MEASURED that day,
+`test_a_completed_bootstrap_is_silent` failed in HELM on the marker alert while
+the same commit passed in the yard that wrote it. Neither the hook nor the
+marker check was wrong; this file was reading an ambient variable and calling
+the result a test. The marker alert has its own file and its own two directions
+(`test_a_yard_session_that_ran_without_its_marker.py`); here it is silenced so
+that what this file asserts is provisioning and nothing else.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -30,9 +45,12 @@ HOOK = ROOT / ".claude" / "hooks" / "session-start.py"
 
 
 def _run(cwd: Path) -> str:
+    # The marker is SET for every run in this file, so `check_yard_marker`
+    # returns None and cannot contribute a word to the output being asserted.
+    env = {**os.environ, "HEADING_OS_YARD": "1"}
     result = subprocess.run(
         [sys.executable, str(HOOK)], input=json.dumps({"cwd": str(cwd)}),
-        cwd=str(cwd), capture_output=True, text=True, timeout=180,
+        cwd=str(cwd), capture_output=True, text=True, timeout=180, env=env,
     )
     assert result.returncode == 0, result.stderr
     return result.stdout
@@ -46,8 +64,13 @@ def _status(worktree: Path, payload: str) -> Path:
 
 
 def test_the_main_clone_is_never_warned_about():
-    """The quiet direction, and the one that keeps this check alive."""
-    assert "YARD" not in _run(ROOT)
+    """The quiet direction, and the one that keeps this check alive.
+
+    Names the warning rather than the word "YARD": that substring is carried by
+    every alert this hook has about yards, present and future, so asserting it
+    makes this test go red on someone else's correct change.
+    """
+    assert "YARD NOT PROVISIONED" not in _run(ROOT)
 
 
 def test_an_unprovisioned_worktree_is_named(temporary_worktree):
@@ -65,7 +88,10 @@ def test_the_warning_says_what_is_actually_at_risk(temporary_worktree):
 def test_a_completed_bootstrap_is_silent(temporary_worktree):
     _status(temporary_worktree,
             '{"status":"ok","step":11,"timestamp":"x","version":"5.0"}')
-    assert "YARD" not in _run(temporary_worktree)
+    output = _run(temporary_worktree)
+    assert "YARD NOT PROVISIONED" not in output
+    assert "DID NOT COMPLETE" not in output
+    assert "UNREADABLE" not in output
 
 
 @pytest.mark.parametrize("status,step", [("failed", 7), ("in_progress", 4)])

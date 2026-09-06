@@ -14,10 +14,13 @@ Output: JSON envelope to stdout with session_id, session_path, started_at_utc,
 ended_at_utc, event_count, truncated, user_turns, assistant_turns, tool_errors,
 system_reminders, and (unless --no-workspace) workspace block with skills/rules/ceo_only_paths.
 
-Exit codes: 0 ok, 2 no session found, 3 session unreadable, 1 caller error
-(an unparseable --since-utc, reported cleanly) or other parser crash. That last
+Exit codes: 0 ok, 2 no session found, 3 session unreadable, 4 the transcript
+directory could not be resolved on this platform, 1 caller error (an
+unparseable --since-utc, reported cleanly) or other parser crash. That last
 line said only "other parser crash" until 2026-08-25, so an operator alerting on
-exit 1 as an engine bug was paged by a typo'd timestamp.
+exit 1 as an engine bug was paged by a typo'd timestamp. 4 is separate from 2
+for the same reason: 2 asserts a completed search of a directory this one never
+named.
 
 CEO-EYES-ONLY USAGE: emitted envelope may contain session content. Do not pipe
 to external services. Consumed only by the local /calibrate skill.
@@ -35,25 +38,38 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.utils.checkpoint_paths import transcript_dir  # noqa: E402
 from scripts.utils.colors import YELLOW, RESET  # noqa: E402
 from scripts.utils.workspace import get_workspace_root  # noqa: E402
 
 
-def _derive_sessions_dir() -> Path:
-    """Derive the Claude Code session-transcript directory for this workspace.
+def _derive_sessions_dir() -> Path | None:
+    """The Claude Code session-transcript directory for this workspace, or None.
 
-    Claude Code stores JSONL transcripts under ``~/.claude/projects/{slug}`` where
-    ``slug`` is the absolute workspace path with every non-alphanumeric character
-    replaced by ``-``. Deriving it programmatically keeps /calibrate portable across
-    Windows accounts, macOS, and Linux without hardcoding a single user's path.
+    The slug rule is NOT reimplemented here. It has one owner,
+    ``scripts/utils/checkpoint_paths.transcript_dir``, and this function held a
+    second copy of it until 2026-09-06: ``re.sub(r"[^a-zA-Z0-9]", "-", ...)``.
+    That character class also eats the UNDERSCORE, which the harness keeps, so
+    the two disagreed on every workspace path carrying one. MEASURED in HELM
+    2026-09-05, ``/home/administrator/ai/.heading-os/yard_ops_backlog``: the
+    owner answers ``...-yard_ops_backlog`` and this answered
+    ``...-yard-ops-backlog``, a directory nothing ever wrote. `locate_session`
+    then finds no transcript there and /calibrate measures a session it never
+    read. It survived three weeks because the operator's own path carries no
+    underscore, so on this one machine the two answers agreed.
 
-    Override via the ``CLAUDE_SESSIONS_DIR`` env var or the ``--sessions-dir`` flag.
+    Returns None off POSIX, because that is what the owner returns rather than
+    guessing a Windows slug it cannot verify. ``main`` says so out loud; a
+    silent None would be the same silent-zero defect one level up.
+
+    The ``CLAUDE_SESSIONS_DIR`` override and the ``--sessions-dir`` flag are
+    kept and are checked FIRST: neither is about the slug, and an explicit
+    directory is an answer the caller already has.
     """
     override = os.environ.get("CLAUDE_SESSIONS_DIR")
     if override:
         return Path(override)
-    slug = re.sub(r"[^a-zA-Z0-9]", "-", str(get_workspace_root().resolve()))
-    return Path.home() / ".claude" / "projects" / slug
+    return transcript_dir(get_workspace_root())
 
 
 # Import-time, and deliberately so. The audit that reached this line proposed a
@@ -61,7 +77,11 @@ def _derive_sessions_dir() -> Path:
 # it cannot. It resolves WORKSPACE_ROOT, then walks for the marker pair, then
 # returns the labelled `_FALLBACK_ROOT`, with no raising path, so the failure the
 # proposal was built on does not exist. `scripts/chronicle.py` imports this name.
-DEFAULT_SESSIONS_DIR = _derive_sessions_dir()
+#
+# `Path | None` since 2026-09-06, and the None is load-bearing: every consumer
+# (`main` below, `scripts/chronicle.py:cmd_build`) must report the refusal
+# rather than search a directory it could not name.
+DEFAULT_SESSIONS_DIR: Path | None = _derive_sessions_dir()
 DEFAULT_MAX_BYTES = 800_000
 
 
@@ -534,6 +554,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.session:
         session_path = args.session
+    elif args.sessions_dir is None:
+        # Exit 4, never 2. Exit 2 means "I looked in the transcript directory
+        # and there were no sessions in it", and nothing looked: the slug owner
+        # refused to guess a directory name for this platform. Reporting that
+        # as an empty search is the silent-zero this whole seam exists to stop.
+        print("the transcript directory could not be resolved on this platform "
+              "(scripts/utils/checkpoint_paths.transcript_dir returns None off "
+              "POSIX rather than guessing a slug it cannot verify). Pass "
+              "--sessions-dir or set CLAUDE_SESSIONS_DIR.", file=sys.stderr)
+        return 4
     else:
         session_path = locate_session(args.sessions_dir)
         if session_path is None:

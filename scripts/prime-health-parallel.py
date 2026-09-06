@@ -38,6 +38,7 @@ from typing import Any
 # Workspace import bootstrap (per development-standards.md)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.utils.checkpoint_paths import transcript_dir  # noqa: E402
 from scripts.utils.workspace import (  # noqa: E402
     get_default_tz,
     get_outputs_dir,
@@ -201,26 +202,59 @@ def run_knowledge_health(workspace_root: Path) -> dict[str, Any]:
     }
 
 
+def memory_dir_for(workspace_root: Path) -> Path | None:
+    """The native memory store for this workspace, or None off POSIX.
+
+    A named function rather than four lines inside `run_memory_health`, because
+    a resolver with no callable seam cannot be compared against the owner by
+    anything but its own output. `tests/test_transcript_dir_has_one_owner.py`
+    runs this over a path corpus and requires the owner's exact answer.
+
+    The slug rule is NOT reimplemented here. It has one owner,
+    `scripts/utils/checkpoint_paths.transcript_dir`, and this held a second copy
+    of it until 2026-09-06: `re.sub(r"[^a-zA-Z0-9]", "-", str(workspace_root))`.
+    Two divergences, both MEASURED in HELM on 2026-09-05. That character class
+    eats the UNDERSCORE the harness keeps, so `.../yard_ops_backlog` resolved to
+    `...-yard-ops-backlog`; and there was no `.resolve()`, so an unnormalised
+    `.../.heading-os/../.heading-os` resolved to
+    `...--heading-os-----heading-os`. Either names a directory nothing ever
+    wrote, `compute_memory_defects` reads an absent directory as an inactive
+    memory system, and /prime prints that at every session start.
+
+    **The case-insensitive fallback is gone, deliberately.** It scanned the
+    projects root for a directory whose name matched the slug ignoring case,
+    and was written for "drive-letter case or other platform quirks" - Windows.
+    The owner returns None off POSIX, so it can no longer run on the platform it
+    was written for. What is left on POSIX it cannot help with either: on a
+    case-insensitive filesystem `is_dir()` already matches, and on a
+    case-sensitive one a directory differing only in case is a directory the
+    harness did not write, so adopting it would hide exactly the divergence
+    above behind a plausible answer. That is the failure mode this change
+    exists to remove, not a fallback for it.
+    """
+    directory = transcript_dir(workspace_root)
+    return None if directory is None else directory / "memory"
+
+
 def run_memory_health(workspace_root: Path) -> dict[str, Any]:
     """Scan the persistent memory directory and report file/line counts.
 
     Inlined (no subprocess) - reads from the Claude Code memory dir under the
     user's ~/.claude project tree.
     """
-    # Claude Code names each project dir by replacing every non-alphanumeric
-    # char in the workspace path with "-". Derive the slug from workspace_root
-    # so this resolves correctly under WSL/Linux, Windows, and exec machines,
-    # rather than hardcoding one platform's encoding.
-    projects_dir = Path.home() / ".claude" / "projects"
-    slug = re.sub(r"[^a-zA-Z0-9]", "-", str(workspace_root))
-    memory_dir = projects_dir / slug / "memory"
-    if not memory_dir.is_dir() and projects_dir.is_dir():
-        # Fallback: drive-letter case or other platform quirks. Match any
-        # project dir whose slug equals workspace_root's case-insensitively.
-        for cand in projects_dir.iterdir():
-            if cand.name.lower() == slug.lower() and (cand / "memory").is_dir():
-                memory_dir = cand / "memory"
-                break
+    memory_dir = memory_dir_for(workspace_root)
+    if memory_dir is None:
+        # "error", not "missing". `missing` is in NON_FAILURE_STATUSES, so it
+        # renders as an ordinary workspace with no memory system - which is the
+        # silent green this whole seam exists to stop. Nothing was counted, and
+        # the panel says that instead of a number.
+        return {
+            "status": "error",
+            "output": ("Memory: the Claude Code project directory could not be "
+                       "resolved on this platform (the slug rule refuses off "
+                       "POSIX rather than guessing). No memory files were "
+                       "counted; this is not a count of zero."),
+        }
     # Objective defect computation is shared with scripts/memory-hygiene.py via
     # scripts/utils/memory_health.compute_memory_defects (dir-parameterized).
     from scripts.utils.memory_health import MEMORY_BUDGET_LINES, compute_memory_defects

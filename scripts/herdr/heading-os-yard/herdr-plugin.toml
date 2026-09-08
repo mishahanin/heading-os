@@ -7,12 +7,24 @@ version = "1.0.0"
 # them resolves at all.
 #
 # It does NOT protect against the event payload changing shape. That is
-# versioned by `protocol` (20) and `schema_version` (1), neither of which is
-# handed to a plugin. Hence the parser in `yard-bootstrap.sh` reads
-# `data.worktree.path` first, falls back to `checkout_path` and then
-# `workspace_cwd`, and REFUSES rather than guessing when none of them answers.
-# That refusal is the only reason the 2026-09-03 breakage cost nothing worse
-# than a YARD that was never provisioned.
+# versioned by `protocol` and `schema_version`, neither of which is handed to a
+# plugin. Hence the parser in `yard-bootstrap.sh` reads `data.worktree.path`
+# first, falls back to `checkout_path` and then `workspace_cwd`, and REFUSES
+# rather than guessing when none of them answers. That refusal is the only
+# reason the 2026-09-03 breakage cost nothing worse than a YARD that was never
+# provisioned.
+#
+# The numbers left this comment on 2026-09-08 because one of them had already
+# moved and nobody noticed. It read `protocol` (20); the 0.8.2 to 0.9.0 upgrade
+# took it to 22, `schema_version` staying at 1. Ask `herdr api schema --json`
+# for the pair rather than reading it here, which is the whole point: a version
+# written down in a file that the version is supposed to describe is a
+# measurement with no way to fail.
+#
+# What that bump did NOT do, MEASURED 2026-09-08 end to end: it did not break
+# the parse. A real `worktree.created` under 0.9.0 provisioned a new YARD to
+# `status: ok, step 11` with the agent up and marked. Two protocol revisions
+# passed underneath the fallback chain above and it still answered.
 min_herdr_version = "0.8.0"
 description = "Provisions each new YARD worktree and proves the engine's guards can fire inside it before an agent starts."
 platforms = ["linux", "macos"]

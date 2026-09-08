@@ -1517,6 +1517,92 @@ _WORKER_TMP_TOTAL = [0]
 _WORKER_TMP_ROWS = 100
 
 
+def declared_basetemp(config) -> Path:
+    """Where this run's `tmp_path` directories will be carved out of.
+
+    NOT `_managed_temp_root`, and NOT the factory at all. `_managed_temp_root`
+    below answers a different question (which tree pytest reclaims) and it gets
+    there through `TempPathFactory.getbasetemp()`, which is fine for a guard
+    that runs after the run has been allowed to start and is exactly wrong for
+    one that decides whether it may. `getbasetemp()` is not a reader: on an
+    explicit `--basetemp` it does `rm_rf(path)` and then `mkdir`, so merely
+    ASKING destroys and recreates the directory. A guard whose refusal deletes
+    the thing it is refusing about is the shape recorded in auto-memory as "a
+    guard that deleted the data, then refused"; MEASURED here on 2026-09-08,
+    the first draft of this function left an empty `.tmp/guard-probe/` behind
+    in the work tree on every refusal.
+
+    So the OPTION is read instead, which is inert. A relative value is resolved
+    against the current directory, which is what pytest does with it a moment
+    later (`Path(config.option.basetemp)` with no anchor). With no `--basetemp`
+    the factory would build one under the system temp directory, so that is
+    what is returned; it is only ever inside a checkout if `TMPDIR` is, and
+    that case is caught by the same comparison rather than by a special case.
+    """
+    given = getattr(getattr(config, "option", None), "basetemp", None)
+    if given:
+        return Path(given).expanduser().resolve()
+    return Path(tempfile.gettempdir()).resolve()
+
+
+def _refuse_a_basetemp_inside_the_checkout(config) -> None:
+    """Refuse the whole session when `tmp_path` would land in this work tree.
+
+    MEASURED 2026-09-08, in the operator's live clone. An unattended agent ran
+
+        pytest tests/ -q -x -n auto --basetemp=.tmp/night-repair/pytest-bt
+
+    from the engine root. The path is RELATIVE, so every `tmp_path` in that run
+    resolved INSIDE the checkout. A test that scaffolds a data overlay called
+    `git_init_commit` in `scripts/create-data-repo.py`, whose idempotency probe
+    asked `git rev-parse --is-inside-work-tree` -- "is this path inside ANY
+    repository", read as "is this the repository I already initialised". For a
+    target under the engine it answers yes, `git init` is skipped, and the three
+    lines below it ran `git config`, `git add -A` and `git commit` against THE
+    ENGINE. The result was commit `ed7cee1` on `main`: six files, two unrelated
+    sessions' work, under a message describing neither.
+
+    WHAT LIMITED THE DAMAGE WAS LUCK. The scaffolded fake overlay landed under
+    `.tmp/`, which is gitignored, so it contributed nothing to that commit. A
+    basetemp anywhere else in the tree would have committed a fabricated data
+    overlay -- a `.gitignore`, a README, `crm/contacts/`, `context/` -- into the
+    PUBLIC engine repository. `.tmp/` being gitignored is not protection; it is
+    where that particular run happened to point.
+
+    HERE, rather than at each of the four sites that can reach
+    `git_init_commit` with a target of their own. One place covers all four and
+    every future one, and it turns a mistake that is merely NOTICEABLE into one
+    that is IMPOSSIBLE: the run never starts, so no test can be the one that
+    fires.
+
+    A `UsageError` at session start, not a skip per test. A per-test skip is a
+    wall of noise and half the suite would still run against a poisoned tree;
+    pytest prints a `UsageError`'s message on stderr and exits 4 with nothing
+    collected.
+
+    The default basetemp (under the system temp directory) and an explicit one
+    OUTSIDE the clone both pass untouched, including under `-n auto`, where a
+    worker's basetemp is a `popen-gwN` subdirectory of the session's. Compared
+    with `is_relative_to` on two resolved paths, never a string prefix: a
+    sibling checkout named `<clone>-2` shares the prefix and contains nothing.
+    """
+    base = declared_basetemp(config)
+    if not base.is_relative_to(_ENGINE_ROOT):
+        return
+    raise pytest.UsageError(
+        f"REFUSING to run: pytest's basetemp resolves to {base}, which is "
+        f"inside this checkout ({_ENGINE_ROOT}). Every tmp_path in this run "
+        f"would be a directory in the engine work tree, so any test that runs "
+        f"`git init`, `git add -A` or `git commit` against its own scratch "
+        f"directory operates on THIS REPOSITORY instead. That happened on "
+        f"2026-09-08 and produced commit ed7cee1 on main. Being under a "
+        f"gitignored path such as .tmp/ is NOT protection: it decides only "
+        f"whether the fabricated files are also committed. Pass an absolute "
+        f"--basetemp outside the clone (the operator uses /tmp/hos-night-bt), "
+        f"or drop the flag and let pytest use the system temp directory."
+    )
+
+
 def _managed_temp_root(config) -> Path:
     """The tree pytest reclaims on its own, which this guard does not police.
 
@@ -1727,6 +1813,10 @@ def pytest_testnodedown(node, error):
 
 def pytest_sessionstart(session):
     global _RESTORE_SOCKET_GUARD, _TMP_BEFORE, _REAL_SESSION_CONFIG
+    # FIRST, before anything else is armed or snapshotted. A run whose scratch
+    # lands in the work tree must not reach collection at all; see the function
+    # for the incident it refuses.
+    _refuse_a_basetemp_inside_the_checkout(session.config)
     _RESTORE_SOCKET_GUARD = _install_socket_guard()
     _REAL_SESSION_CONFIG = session.config
     # Both halves of the temp-directory guard, armed before any test body runs.

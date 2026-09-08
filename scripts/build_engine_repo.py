@@ -35,10 +35,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.atomic import atomic_write_text
 from scripts.utils.clone_guard import require_main_clone
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
+from scripts.utils.paths import DataRootError
 from scripts.utils.workspace import (
     get_outputs_dir,
     get_routing_destination,
     get_workspace_root,
+    require_outside_engine_clone,
 )
 
 # Data-path tokens (mirror leak-guard) used only for a belt-and-braces assertion
@@ -149,6 +151,19 @@ def main() -> int:
 
     root = get_workspace_root()
     target = Path(args.target).resolve() if args.target else (root.parent / ".heading-os")
+
+    # `--target` is a caller-supplied directory and the build ends in
+    # `git add -A` + `git commit --no-verify` inside it, so an engine-internal
+    # target commits THIS repository past the secret scanner, the leak guards
+    # and the real-entity scan in one step. The default is a sibling; there is
+    # no legitimate call with a target under the clone. See the 2026-09-08
+    # incident recorded in
+    # `tests/test_ten_scripts_that_committed_whatever_directory_they_were_handed.py`.
+    try:
+        require_outside_engine_clone(target, "--target")
+    except DataRootError as exc:
+        print(f"{RED}  REFUSING:{RESET} {exc}")
+        return 1
 
     buckets = partition(root)
     engine = sorted(buckets["engine"])

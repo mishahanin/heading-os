@@ -48,7 +48,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.clone_guard import require_main_clone
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.git_push import supervised_push
-from scripts.utils.workspace import get_workspace_root
+from scripts.utils.paths import DataRootError
+from scripts.utils.workspace import get_workspace_root, require_outside_engine_clone
 
 # Engine paths that must NEVER live in (or be pushed from) the data repo, plus
 # the rebuildable index and runtime/secret files the data overlay deliberately
@@ -170,14 +171,65 @@ def write_repo_files(target: Path, dry_run: bool) -> None:
         print(f"{GREEN}wrote{RESET} {name}")
 
 
+def is_repo_root(target: Path) -> bool:
+    """True only when `target` is the ROOT of a git repository, not merely in one.
+
+    `git rev-parse --is-inside-work-tree` answers "is this path inside ANY
+    repository". It was read here as "is this the repository I already
+    initialised", and the two differ for every path under an existing checkout.
+
+    MEASURED 2026-09-08 in the operator's live clone. A test run with
+    `--basetemp=.tmp/night-repair/pytest-bt` put every `tmp_path` inside the
+    engine work tree; a test scaffolded a data overlay there and called
+    `git_init_commit`. The old probe answered yes, `git init` was skipped, and
+    the `git config` / `git add -A` / `git commit` below ran against THE ENGINE:
+    commit `ed7cee1` on `main`, six files, two unrelated sessions' work, under a
+    message describing neither. `git add -A` has been whole-tree since git 2.0,
+    so the cwd being a leaf under `.tmp/` did not limit it.
+
+    `--show-toplevel` is the right primitive because it answers with an
+    IDENTITY rather than a yes/no: it prints the work-tree root of whatever
+    repository contains `target`, so comparing it with `target` distinguishes
+    "this is my repo" from "this is somebody else's repo that happens to
+    contain me". `--is-inside-work-tree` cannot make that distinction at all,
+    and no combination of its exit codes can. Resolved on both sides before the
+    comparison, because git answers with a fully resolved path and `target`
+    arrives however the caller spelled it.
+
+    A non-zero exit means git declined to answer -- not a repository, or a
+    dubious-ownership refusal -- and both mean "not my repo root", which is the
+    safe direction: at worst a `git init` runs in a directory that is already
+    one, which git reports and leaves alone.
+
+    The same shape as `scripts/apply-wizard-answers.py`'s `--reset` gate, which
+    uses the same family of probe as a REFUSAL. Same primitive, opposite
+    consequence, and this site had the consequence backwards.
+    """
+    probe = run(["git", "rev-parse", "--show-toplevel"], target, check=False)
+    if probe.returncode != 0:
+        return False
+    toplevel = probe.stdout.strip()
+    if not toplevel:
+        return False
+    return Path(toplevel).resolve() == Path(target).resolve()
+
+
 def git_init_commit(target: Path, dry_run: bool) -> int:
     """Initialise the repo on main and create the first commit."""
     if dry_run:
         print(f"{YELLOW}[dry-run]{RESET} would git init + commit at {target}")
         return 0
-    # Idempotent: skip init if already a repo.
-    is_repo = run(["git", "rev-parse", "--is-inside-work-tree"], target, check=False).returncode == 0
-    if not is_repo:
+    # The commit below is `git add -A`, so it stages whatever work tree it lands
+    # in. Refused HERE and not only in `main()` because tests and future callers
+    # reach this function directly, and `main()`'s refusal cannot cover them.
+    #
+    # `require_main_clone(__file__)` is NOT a defence here and never was: the
+    # 2026-09-08 incident happened IN HELM, where that guard passes cleanly. It
+    # answers "which checkout am I running from", never "where am I about to
+    # commit". Do not read its presence in `main()` as covering this.
+    require_outside_engine_clone(target, "the data repo target")
+    # Idempotent: skip init only when `target` is the root of its OWN repository.
+    if not is_repo_root(target):
         run(["git", "init", "-b", "main"], target)
     # A fresh repo on a machine with no *global* git identity fails the first commit
     # with "Author identity unknown". Seed a local identity from the workspace's git
@@ -279,6 +331,24 @@ def main() -> int:
     # produced an empty scaffold in one directory and a git repo with no data
     # tree in another, and then pushed the wrong one.
     target = Path(args.path).expanduser().resolve()
+
+    # BEFORE anything is written, because the first thing `main()` does after
+    # this is scaffold a whole data tree at `target`. There is no legitimate
+    # call with an engine-internal target: the data overlay is a SIBLING of the
+    # engine by construction (`--path` defaults to `../.heading-os-data`), and
+    # the engine is code only. A target inside the clone means either a typo or
+    # a caller whose "temp" directory is not where it thinks it is, which is
+    # exactly how 2026-09-08 happened.
+    #
+    # `require_outside_engine_clone` rather than a check written here: it is the
+    # workspace's existing answer to this question (five callers already), and a
+    # second copy is the one that stops being fixed.
+    try:
+        require_outside_engine_clone(target, "--path")
+    except DataRootError as exc:
+        print(f"{RED}REFUSING:{RESET} {exc}")
+        return 2
+
     repo_name = args.repo_name or target.name.lstrip(".")
     private = not args.public
 

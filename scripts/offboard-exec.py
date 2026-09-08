@@ -36,7 +36,9 @@ from scripts.utils.workspace import (
     get_data_config_dir,
     load_admin_config,
     load_github_org, get_crm_contacts_dir, get_outputs_dir, repo_name_for,
+    require_outside_engine_clone,
 )
+from scripts.utils.paths import DataRootError
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 from scripts.utils.git_push import current_branch, supervised_push
 
@@ -636,9 +638,21 @@ def update_exec_registry(slug: str) -> None:
         atomic_write_text(registry_file, json.dumps(registry, indent=2))
         print(f"  {GREEN}[ok]{RESET} Marked {slug} as offboarded in registry")
 
+        # The DATA overlay. `get_data_root()` falls back to `<engine>/examples`
+        # and to `<engine>` itself when no overlay is configured, so on a
+        # data-less clone this block committed and PUSHED the engine.
+        cwd = str(registry_file.parent.parent)
+        try:
+            require_outside_engine_clone(Path(cwd), "the exec registry repo")
+        except DataRootError as exc:
+            print(f"  {RED}[ERROR]{RESET} {exc}")
+            print(f"  {RED}[ERROR]{RESET} The registry file was written locally "
+                  f"but NOT committed: offboard is INCOMPLETE, do not assume "
+                  f"{slug} is removed fleet-wide.")
+            return
+
         # Try to commit and push
         try:
-            cwd = str(registry_file.parent.parent)
             run_cmd(["git", "add", "config/exec-registry.json"], cwd=cwd)
             run_cmd(["git", "commit", "-m", f"Offboard exec: {slug}"], cwd=cwd)
             # Supervised + verified push: the registry change must actually land on

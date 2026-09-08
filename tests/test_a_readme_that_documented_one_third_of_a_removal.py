@@ -1,4 +1,4 @@
-"""Removing a YARD is three commands; the README documented one, wrongly.
+"""Removing a YARD took three commands; the README documented one, wrongly.
 
 `scripts/herdr/README.md` said, as the whole of its removal procedure:
 
@@ -87,7 +87,15 @@ def looks_like_an_id(argument: str) -> bool:
     return bool(A_PLACEHOLDER.match(argument) or AN_ID.match(argument))
 
 
-REMOVAL_HEADING = "### Removing one is THREE commands"
+# The heading dropped "THREE" on 2026-09-08, and the word is the reason this
+# constant carries a comment. MEASURED that day on herdr 0.9.0, removing a real
+# YARD: `worktree remove --workspace <id>` closed the workspace as well, and the
+# `workspace close` that followed answered `workspace_not_found`. So step 2 is a
+# fallback rather than a step, and a heading promising a fixed count was a claim
+# the commands no longer made. Every assertion below still requires all three
+# commands to be PRESENT and ordered: what changed is the section's title, not
+# what a reader must be able to find in it.
+REMOVAL_HEADING = "### Removing one, in this order"
 
 
 def _readme_text() -> str:

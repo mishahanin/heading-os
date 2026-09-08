@@ -163,17 +163,27 @@ DID (rejected, or accepted and silently created a worktree on the default
 branch) is NOT ESTABLISHED: settling it needs a mutating run, and the answer
 does not change what the correct line is.
 
-### Removing one is THREE commands, in this order
+### Removing one, in this order
 
 Every one of them is a human action, never automatic. Doing only the first
-leaves a dead entry in the sidebar; doing only the first two leaves the branch.
+leaves the branch behind.
 
 ```bash
 herdr workspace list                  # find the ID: result.workspaces[].workspace_id
-herdr worktree remove --workspace w47 # 1. the checkout
-herdr workspace close w47             # 2. the sidebar entry and its panes
+herdr worktree remove --workspace w47 # 1. the checkout, and the sidebar entry with it
+herdr workspace close w47             # 2. only if step 1 left the entry standing
 git branch -d fix-router              # 3. the branch
 ```
+
+**Step 2 is a fallback now, not a step.** This section read "THREE commands"
+and said step 1 left a dead entry in the sidebar. MEASURED 2026-09-08 on herdr
+0.9.0, removing a real YARD with its agent still running: step 1 answered
+`{"type":"worktree_removed"}` and took the workspace with it, and step 2 then
+answered `{"error":{"code":"workspace_not_found"}}`. Whether that changed in
+0.9.0 or was always so is NOT ESTABLISHED, and settling it needs a mutating run
+on a version nobody has installed. Run step 2 anyway when `herdr workspace list`
+still shows the entry; it costs one command and refuses harmlessly when there is
+nothing left to close.
 
 **`--workspace` takes the ID, never the branch name.** MEASURED 2026-09-03:
 `herdr worktree remove --help` prints `--workspace <ID>`, and the wire schema

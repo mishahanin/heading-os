@@ -961,6 +961,30 @@ def test_the_fixed_config_path_resolves_it_with_no_socket_variable(
     assert "uncommitted change" in _reason(decision)
 
 
+def test_a_help_flag_beside_a_real_workspace_id_is_still_judged(bench, dirty,
+                                                                tmp_path):
+    """The usage exemption added 2026-09-08 reaches a link with NOTHING else.
+
+    Here the link also carries `--workspace wTEST`, which resolves to a yard
+    with uncommitted work in it, so the removal is judged exactly as it was
+    before the exemption existed. Paired with the case below, this is the half
+    that proves a help flag cannot ride along with a real target.
+    """
+    socket = _herdr_session(tmp_path, "wTEST", dirty)
+    decision = _run(bench, bench.helm,
+                    "herdr worktree remove --workspace wTEST --help",
+                    HERDR_SOCKET_PATH=str(socket))
+    assert _denied_by_this_wall(decision), _reason(decision) or "permitted"
+    assert "uncommitted change" in _reason(decision)
+
+
+def test_a_help_flag_beside_a_named_checkout_is_still_judged(bench, dirty):
+    """The git spelling of the same thing: the path is the something else."""
+    decision = _run(bench, bench.helm, f"git worktree remove {dirty} --help")
+    assert _denied_by_this_wall(decision), _reason(decision) or "permitted"
+    assert "uncommitted change" in _reason(decision)
+
+
 def test_other_herdr_commands_are_untouched(bench, dirty, tmp_path):
     socket = _herdr_session(tmp_path, "wTEST", dirty)
     for command in ("herdr worktree list", "herdr worktree create --branch x",

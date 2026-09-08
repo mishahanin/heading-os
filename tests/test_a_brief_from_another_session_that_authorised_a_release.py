@@ -158,11 +158,14 @@ def _payload(command: str, transcript: Path) -> dict:
 def _gate(tmp_path, monkeypatch, command: str, prompt: str):
     """Drive the real entry point, with the audit log redirected.
 
-    The log is a real file under `.claude/state/release` in the live checkout,
-    and a test that authorises a release must not append to the operator's audit
-    trail. Redirecting it also means a run that WOULD have logged is visible.
+    The log is a real file at `~/.heading-os/release/authorised.jsonl` since
+    2026-09-08, and a test that authorises a release must not append to the
+    operator's audit trail. Redirecting it also means a run that WOULD have
+    logged is visible. `HEADING_OS_RELEASE_LOG` rather than a `setattr`: the
+    path is resolved at call time now, so the environment is the seam.
     """
-    monkeypatch.setattr(D, "_RELEASE_STATE_DIR", tmp_path / "release")
+    monkeypatch.setenv("HEADING_OS_RELEASE_LOG",
+                       str(tmp_path / "release" / "authorised.jsonl"))
     return D.check_release_gate(_payload(command, _transcript(tmp_path, prompt)))
 
 
@@ -339,11 +342,11 @@ def test_the_refusal_says_what_it_does_not_establish(tmp_path, monkeypatch):
 
 def test_a_marked_brief_writes_no_audit_record(tmp_path, monkeypatch):
     """The observable consequence: nothing was logged as authorised."""
-    log_dir = tmp_path / "release"
-    monkeypatch.setattr(D, "_RELEASE_STATE_DIR", log_dir)
+    log = tmp_path / "release" / "authorised.jsonl"
+    monkeypatch.setenv("HEADING_OS_RELEASE_LOG", str(log))
     D.check_release_gate(_payload("git commit -m x",
                                   _transcript(tmp_path, THE_BRIEF)))
-    assert not (log_dir / "authorised.jsonl").exists()
+    assert not log.exists()
 
 
 @pytest.mark.parametrize("wrapper", [

@@ -2807,7 +2807,128 @@ def check_fanout_first(payload: dict):
 # unrecognised command shape all refuse. A gate that opens when it cannot see is
 # not a gate.
 
-_RELEASE_STATE_DIR = _state_dir() / "release"
+# THE AUDIT LOG DOES NOT USE `_state_dir()`, AND MUST NOT BE PUT BACK ON IT.
+#
+# It sat at `_state_dir() / "release" / "authorised.jsonl"` until 2026-09-08,
+# which resolves under `WORKSPACE` — the CURRENT CHECKOUT. Every YARD therefore
+# kept its own copy, the path is gitignored (`.gitignore:280`), and the
+# documented end of a yard's life is `git worktree remove`. MEASURED 2026-09-08:
+# a throwaway second checkout was driven through `check_release_gate`, wrote
+# `{"action": "commit", "authorised_by": "commit this", ...}` into its own
+# `.claude/state/release/authorised.jsonl`, and the record ceased to exist the
+# moment the checkout was removed. A yard's commit is the case where the trace
+# matters MOST, because a yard is the session the operator was not sitting at,
+# and it was the one record guaranteed to be destroyed.
+#
+# THE SPLIT IS DELIBERATE. `_state_dir()` is right for `_GRAPH_STATE_DIR`,
+# `_FANOUT_STATE_DIR` and the rest: those are GUARD state, a guard must inspect
+# the tree it is standing in, and deriving them from anything but the current
+# checkout is the `WORKSPACE_ROOT`-in-a-copied-`.env` trap that CLAUDE.md's
+# "Guards must be armed inside the task" paragraph exists to close. This is not
+# guard state. It is an AUDIT TRAIL, and an audit trail's whole value is that it
+# outlives the thing it describes. Do not "consolidate" these two back onto one
+# helper: they answer opposite questions about lifetime, and the consolidation
+# reads as tidying right up until the next yard is deleted.
+#
+# AND IT IS NOT STORED IN ANY CHECKOUT. Operator directive, 2026-09-08, and the
+# reason is stronger than durability. `authorised_by` holds the operator's own
+# typed words verbatim, up to 400 characters: a counterparty, a number, a deal,
+# a person. That is operator data, and this engine never contains real data.
+# Gitignored is not absent — `scripts/leak-guard.py` and the push-time content
+# scan in `scripts/push-all.py` both select over `git ls-files` plus
+# `--others --exclude-standard`, so an ignored path is invisible to both, and
+# the log has never been scanned by either. See `docs/HOOKS-REFERENCE.md` for
+# what happens to the records already written under the old path.
+#
+# HOME RATHER THAN THE OVERLAY, and what the other choice would have bought.
+# The private data overlay is backed up and private forever, which suits an
+# audit trail, and it is the workspace's normal home for operator data. It was
+# not chosen because it is ONE git working tree with ONE index shared by HELM
+# and every yard on this machine: an append per release would leave an
+# uncommitted change there permanently, which the next session's overlay commit
+# sweeps up unreviewed. A gitignored path inside the overlay avoids the churn
+# but reintroduces exactly the "present but unscanned" shape named above, one
+# repository along. So: outside both repositories, no churn, no index, no
+# classification question. What was given up is backup and a second machine's
+# view of the same trail; if either is ever needed, the answer is a job that
+# COPIES this file into the overlay on a cadence, not a move of the write path.
+_RELEASE_LOG_PIN = "HEADING_OS_RELEASE_LOG"
+_RELEASE_LOG_DEFAULT = Path.home() / ".heading-os" / "release" / "authorised.jsonl"
+
+
+def _release_log_path() -> Path | None:
+    """Where an authorised release is recorded, or None to record nothing.
+
+    Resolved at CALL time, not frozen at import like `_RELEASE_STATE_DIR` was,
+    and that is the containment. A constant computed at import means a test that
+    sets the pin after importing this module appends to the operator's real
+    audit log; with a call-time read, `monkeypatch.setenv` is enough and an
+    in-process test cannot miss the seam.
+
+    THE TRAP THIS ANSWERS. A path outside the checkout is exactly a path a test
+    run can reach. `tests/conftest.py` contains `.claude/state/` by SETTING
+    `HEADING_OS_STATE_DIR`, and containment that depends on a variable being set
+    fails open the moment a test clears it or a child is spawned with a trimmed
+    environment — the conftest's own docstrings record that happening. So there
+    are two independent legs and both must fail before a real record is
+    poisoned: the explicit pin, and a refusal to touch the default at all when
+    this process can tell it is under pytest. An audit log is worse than most
+    state to poison, because a forged line destroys the only artefact that
+    answers "who authorised this".
+
+    Order matters. The pin wins over the pytest check, because a test that
+    asserts a record IS written needs somewhere to write it. A pin that is
+    RELATIVE records nothing rather than falling back to the default, which is
+    the opposite of what `_state_dir()` does with a relative value and is
+    deliberate: there, falling back reaches a scratch directory; here, it would
+    reach the operator's live trail.
+    """
+    pin = os.environ.get(_RELEASE_LOG_PIN)
+    if pin:
+        candidate = Path(pin).expanduser()
+        if candidate.is_absolute():
+            return candidate
+        print(f"dispatch: {_RELEASE_LOG_PIN}={pin!r} is relative; recording "
+              f"nothing rather than falling back to the operator's audit log.",
+              file=sys.stderr)
+        return None
+    if ("PYTEST_CURRENT_TEST" in os.environ
+            or "PYTEST_VERSION" in os.environ
+            or "PYTEST_XDIST_WORKER" in os.environ
+            or "pytest" in sys.modules):
+        print(f"dispatch: under pytest with no {_RELEASE_LOG_PIN}; the "
+              f"authorised-release log is not written.", file=sys.stderr)
+        return None
+    return _RELEASE_LOG_DEFAULT
+
+
+def _checkout_branch(root: Path) -> str:
+    """The branch `root` has checked out, read from HEAD without a subprocess.
+
+    A worktree's `.git` is a FILE holding `gitdir: <path>`, so the naive
+    `root / ".git" / "HEAD"` reads nothing in the exact case this log exists
+    for. Read rather than shelled out because `_record_release` is telemetry on
+    a wall that runs on every Bash call, and spawning `git` here would put a
+    process on the release path.
+    """
+    try:
+        dot = root / ".git"
+        if dot.is_file():
+            line = dot.read_text(encoding="utf-8", errors="replace").strip()
+            if not line.startswith("gitdir:"):
+                return "unknown"
+            gitdir = Path(line.split(":", 1)[1].strip()).expanduser()
+            if not gitdir.is_absolute():
+                gitdir = root / gitdir
+        else:
+            gitdir = dot
+        head = (gitdir / "HEAD").read_text(encoding="utf-8").strip()
+        if head.startswith("ref: refs/heads/"):
+            return head[len("ref: refs/heads/"):]
+        return head          # detached: the raw object name
+    except OSError:
+        return "unknown"
+
 
 # Quoted spans are stripped before matching, so `grep "git commit" file` is not
 # read as a commit. Without this the wall blocks ordinary searches, and a wall
@@ -3474,21 +3595,60 @@ def _record_release(action: str, command: str, prompt: str) -> None:
     Telemetry only; it can never change a decision. The point is that every
     commit and push this workspace makes can be traced back to the exact words
     that authorised it, which is the thing that was missing when the rule was
-    broken.
+    broken. Everything below stays inside one `except Exception`, so a durable
+    path that does not exist, is not writable, or sits on a disconnected volume
+    prints and is dropped. It never turns into a refused commit.
+
+    `checkout` and `branch` are what a SHARED file needs that a per-checkout one
+    did not. One log now carries HELM's releases and every yard's; without them
+    the merged trail answers a weaker question than the file it replaced, since
+    "who authorised this commit" is only half an answer if you cannot say which
+    tree the commit happened in.
+
+    ONE `os.write` OF ONE PRE-ENCODED LINE, because several yards and HELM
+    append to this file concurrently. A buffered text handle is free to split a
+    record across write() calls whenever the payload outgrows its buffer, and
+    two split records interleave into two corrupt lines. A single write() on a
+    regular file opened O_APPEND resolves the offset and copies under the
+    inode lock, so a concurrent append lands before or after, never inside.
+    Worst-case line length is bounded by the four caps below and measured in
+    `tests/test_an_audit_log_deleted_by_its_own_cleanup.py` at 8517 bytes. A
+    short return is reported rather than assumed away.
+
+    Honest limit, from the mutation run of 2026-09-08: swapping this for
+    `io.open(path, "ab", buffering=64)` survives, and it survives because it is
+    EQUIVALENT at these sizes, not because the test is weak. MEASURED the same
+    day by counting raw `FileIO.write` calls under a 64-byte `BufferedWriter`:
+    5500 and 8517 byte payloads each cost exactly one. CPython bypasses the
+    buffer for anything larger than it. The mutation that actually splits the
+    record across two `write()` calls IS caught. So `os.write` here buys
+    independence from a buffer size nobody would think to check, not a
+    behaviour the buffered form lacks today.
     """
     try:
         import datetime as _dt
 
-        _RELEASE_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        path = _release_log_path()
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         rec = {
             "at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
             "action": action,
             "command": (command or "")[:400],
             "authorised_by": (prompt or "")[:400],
+            "checkout": str(WORKSPACE)[:400],
+            "branch": _checkout_branch(WORKSPACE)[:200],
         }
-        with (_RELEASE_STATE_DIR / "authorised.jsonl").open(
-                "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        blob = (json.dumps(rec, ensure_ascii=False) + "\n").encode("utf-8")
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            written = os.write(fd, blob)
+        finally:
+            os.close(fd)
+        if written != len(blob):
+            print(f"[_dispatch] release log wrote {written} of {len(blob)} "
+                  f"bytes; the last line may be truncated.", file=sys.stderr)
     except Exception as exc:  # pragma: no cover - defensive
         print(f"[_dispatch] release log unavailable ({type(exc).__name__}): {exc}",
               file=sys.stderr)

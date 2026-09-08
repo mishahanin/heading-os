@@ -40,13 +40,13 @@ from __future__ import annotations
 import argparse
 import ast
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
+from scripts.utils.repo_files import git_index_paths  # noqa: E402
 from scripts.utils.resolver_closure import (  # noqa: E402
     ENGINE_ROOT,
     derived_resolvers,
@@ -106,17 +106,21 @@ def tracked_paths() -> frozenset[str]:
 
     One `git ls-files` per repo rather than one per candidate: the per-file form
     was measured at roughly 400 subprocesses for the engine tree alone.
+
+    Through `git_index_paths`, which is the one reader in this tree, rather than
+    the private copy that stood here until 2026-09-08. That copy had the `-z`,
+    skipped text mode and decoded with surrogateescape -- the three the shared
+    reader's docstring names -- and missed the fourth, which is the reason the
+    shared one raises. MEASURED 2026-09-08 against a repository git tracks
+    nothing in, the copy returned `frozenset()`, so every candidate writer read
+    `"tracked": false`, `--untracked-only` exited 1, and the report said the
+    operator's committed provisioning tools would be refused by the rule this
+    census exists to size. `IndexUnreadable` propagates: no verdict is better
+    than that one.
     """
     out: set[str] = set()
     for repo in _repos():
-        result = subprocess.run(
-            ["git", "ls-files", "-z"],
-            capture_output=True, cwd=str(repo), check=True,
-        )
-        out |= {
-            str(repo / part.decode("utf-8", "surrogateescape"))
-            for part in result.stdout.split(b"\0") if part
-        }
+        out |= {str(repo / rel) for rel in git_index_paths(repo)}
     return frozenset(out)
 
 

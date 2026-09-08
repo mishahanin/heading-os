@@ -145,10 +145,14 @@ def test_a_directory_that_is_not_a_repository_refuses(tmp_path):
 # wrote the rule. Converting a security-critical guard is its own piece of work
 # with its own evidence.
 DUPLICATE_ENUMERATIONS = {
-    "scripts/overlay-writer-census.py": (
-        "a plain -z enumeration, byte-correct today, and a second copy of the "
-        "reader. Consolidation is the fix, not a bug fix."
-    ),
+    # scripts/overlay-writer-census.py WAS here, frozen as "byte-correct today,
+    # and a second copy of the reader. Consolidation is the fix, not a bug fix."
+    # Consolidated 2026-09-08. The half the freeze did not see: byte-correct is
+    # three of the four properties, and the fourth is the one the shared reader
+    # RAISES for. MEASURED that day against a repository git tracks nothing in,
+    # the copy returned `frozenset()` and the census reported every candidate
+    # writer untracked. Held by
+    # tests/test_a_second_index_reader_that_read_nothing_as_nothing_to_track.py.
     # scripts/publish-corporate.py is NOT here, and the omission is the
     # measurement rather than an oversight. Its argv is `["git", "ls-files",
     # "-z", *extra]`, so the narrowed rule reads it as the filtered question it

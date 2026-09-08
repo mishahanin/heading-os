@@ -25,9 +25,19 @@ them to refuse.
 
 MEASURED 2026-09-02 against `.pre-commit-config.yaml`: 25 local hooks; 0 with a
 `files:` pattern matching no tracked file; 2 naming a script that no test file
-names (`scripts/lint-ratchet.py`, `scripts/run-integration-tests.py`). Both are
-frozen in BASELINE with that reason, so the ratchet holds today's state and
-refuses tomorrow's third.
+names (`scripts/lint-ratchet.py`, `scripts/run-integration-tests.py`). Both were
+frozen in BASELINE with that reason.
+
+Both were WRONG, and the fault was here rather than in either script. MEASURED
+2026-09-08: question 2 asked for the substring `scripts/lint-ratchet.py`, while
+every test in this tree reaches its target as `ROOT / "scripts" /
+"lint-ratchet.py"`, which contains no such substring.
+`tests/test_lint_ratchet.py` had been driving `cmd_check()` to return 1 on new
+lint debt since 2026-09-01, a day BEFORE the reason "fixing it is writing a
+behavioural test for the ratchet" was written down. `names_script` below now
+accepts either spelling of the separator, both BASELINE entries are gone, and
+`tests/test_a_naming_check_that_could_not_see_a_path_join.py` holds it. Same
+run after the fix: 25 local hooks, 6 findings, all six inline entries, 0 new.
 
 Scope, precisely (`.claude/rules/scope-claims.md`)
 --------------------------------------------------
@@ -83,15 +93,6 @@ MIN_HOOKS = 15  # measured 2026-09-02: 25 local hooks
 # finding is NOT added here by any code path; it has to be fixed or the reason
 # has to be written by a person.
 BASELINE: dict[str, str] = {
-    "hook:lint-ratchet": (
-        "scripts/lint-ratchet.py is named by no test. Real gap, pre-existing, "
-        "and fixing it is writing a behavioural test for the ratchet rather "
-        "than an edit to this file."
-    ),
-    "hook:sentinel-integration-tests": (
-        "scripts/run-integration-tests.py is named by no test. Real gap, "
-        "pre-existing, same shape as lint-ratchet above."
-    ),
     "hook:vault-guard": (
         "Inline `python -c`, so it names no script and question 2 cannot reach "
         "it. Its behaviour is covered by tests/security/ vault-path cases."
@@ -183,6 +184,36 @@ def test_corpus(root: Path, tracked: list[str]) -> str:
 
 SCRIPT_RE = re.compile(r"(scripts/[\w\-./]+\.py)")
 
+# How a `/` may be spelled between two segments of a path a test names: as
+# itself, or as the `Path` join every test in this tree actually writes --
+# `ROOT / "scripts" / "lint-ratchet.py"`, in either quote style, with or
+# without the spaces. The separator is the only thing that varies; the
+# segments themselves are matched literally, so `docs/lint-ratchet.py` and
+# `scripts/lint-ratchet-other.py` are still misses.
+_SEP = r"""(?:/|["']\s*/\s*["'])"""
+
+
+def names_script(script: str, tests: str) -> bool:
+    """Does the test corpus name `script`, in any spelling of the separator?
+
+    Asked of the whole path, never of the basename. Five basenames under
+    `scripts/` are not unique (`paths.py`, `pulse.py`, `search.py`,
+    `state.py`, `__init__.py`), so a bare basename is not evidence that THIS
+    script is the one named, and a check that accepted one would answer a
+    different question than the one this file asks.
+
+    Until 2026-09-08 this was `script not in tests`, one spelling only. Both
+    findings it had ever produced were false: MEASURED that day, the shipped
+    command reported `scripts/lint-ratchet.py` and
+    `scripts/run-integration-tests.py` as named by no file under `tests/`
+    while `tests/test_lint_ratchet.py` drove `cmd_check()` to return 1 on new
+    lint debt and `tests/test_a_dry_run_that_said_the_case_did_not_exist.py`
+    drove `run_tests()` over pytest exit codes 2 through 6. Both reach their
+    target through `ROOT / "scripts" / "..."`, which contains no `scripts/`.
+    """
+    return re.search(_SEP.join(re.escape(part) for part in script.split("/")),
+                     tests) is not None
+
 
 def hook_matches_nothing(hook: dict, tracked: list[str]) -> bool:
     """A `files:` regex that matches no tracked path. `always_run` is exempt:
@@ -217,7 +248,7 @@ def findings(hooks: list[dict], tracked: list[str], tests: str) -> dict[str, str
         script = hook_script(hook)
         if script is None:
             out[key] = "entry names no scripts/ path, so no test can be found for it"
-        elif script not in tests:
+        elif not names_script(script, tests):
             out[key] = f"{script} is named by no file under tests/"
     return out
 

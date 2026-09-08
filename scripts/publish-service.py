@@ -28,7 +28,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.clone_guard import require_main_clone
-from scripts.utils.workspace import get_workspace_root, get_data_config_dir
+from scripts.utils.workspace import (
+    get_workspace_root, get_data_config_dir, require_outside_engine_clone,
+)
+from scripts.utils.paths import DataRootError
 from scripts.utils.atomic import atomic_write_text
 from scripts.utils.rmtree import rmtree_force
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
@@ -312,6 +315,17 @@ def main() -> int:
     try:
         dest = downstream_dest(workspace, downstream_repo)
     except ValueError as exc:
+        print(f"{RED}{exc}{RESET}")
+        return 1
+    # `downstream_dest` forces a plain name joined onto `workspace.parent`, so
+    # `dest` is a SIBLING -- and the engine clone is a sibling of itself's
+    # parent too. A manifest whose `downstream_repo` happens to name the
+    # engine's own directory resolves to this clone, which `copy_includes`
+    # rmtree's and overwrites and `publish` then commits with `git add -A`.
+    # The sibling rule cannot see that; this asks the question directly.
+    try:
+        require_outside_engine_clone(dest, "the downstream service-host repo")
+    except DataRootError as exc:
         print(f"{RED}{exc}{RESET}")
         return 1
     if not (dest / ".git").exists():

@@ -34,7 +34,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET  # noqa: E402
-from scripts.utils.paths import get_workspace_root  # noqa: E402
+from scripts.utils.paths import (  # noqa: E402
+    DataRootError,
+    get_workspace_root,
+    require_outside_engine_clone,
+)
 
 DEFAULT_REPO_DIR = "../heading-os-marketplace"
 REPO_SLUG = "mishahanin/heading-os-marketplace"
@@ -251,6 +255,20 @@ def main(argv=None) -> int:
 
     engine_root = get_workspace_root()
     repo_dir = (engine_root / args.repo_dir).resolve()
+    # BEFORE the `.git` test below, not after. `--repo-dir .` resolves to the
+    # engine, and in HELM `<engine>/.git` IS a directory, so that test passes
+    # and the run proceeds: `sync_into_repo` rmtree's `.claude-plugin/` and
+    # `plugins/` in the target and `commit_and_push` runs `git add -A`, which is
+    # the deletion of engine content committed to the engine. In a YARD `.git`
+    # is a FILE and the test happens to refuse first, which is exactly the kind
+    # of accidental protection the 2026-09-08 incident showed is worth nothing:
+    # that one happened in HELM. The marketplace is a downstream PUBLIC mirror
+    # and is never this clone.
+    try:
+        require_outside_engine_clone(repo_dir, "--repo-dir")
+    except DataRootError as exc:
+        print(f"{RED}REFUSING TO PUBLISH: {exc}{RESET}", file=sys.stderr)
+        return 2
     if not (repo_dir / ".git").is_dir():
         print(
             f"{RED}Not a git repo: {repo_dir}{RESET}\n"

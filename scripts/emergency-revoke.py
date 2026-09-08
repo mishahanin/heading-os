@@ -44,7 +44,7 @@ from scripts.utils.workspace import (
     get_workspace_root, validate_admin, get_exec_slug, load_exec_registry,
     get_data_config_dir,
     get_crm_central_path, get_corporate_repo_path, load_admin_config,
-    load_github_org
+    load_github_org, require_outside_engine_clone
 )
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 from scripts.utils.atomic import atomic_write_text
@@ -304,8 +304,20 @@ def update_registry_status(slug: str) -> None:
     atomic_write_text(registry_file, json.dumps(registry, indent=2))
     print(f"  {GREEN}[ok]{RESET} Status set to 'revoked'")
 
+    # The DATA overlay. `get_data_root()` falls back to `<engine>/examples` and
+    # to `<engine>` itself when no overlay is configured, so on a data-less
+    # clone this block committed and PUSHED the engine -- during an incident,
+    # unconditionally.
+    cwd = str(registry_file.parent.parent)
     try:
-        cwd = str(registry_file.parent.parent)
+        require_outside_engine_clone(Path(cwd), "the exec registry repo")
+    except DataRootError as exc:
+        print(f"  {RED}[STOP]{RESET} {exc}")
+        print(f"  {YELLOW}The revocation was written to {registry_file} but "
+              f"NOT committed or pushed. Access is NOT revoked fleet-wide.{RESET}")
+        return
+
+    try:
         run_cmd(["git", "add", "config/exec-registry.json"], cwd=cwd)
         run_cmd(["git", "commit", "-m", f"EMERGENCY: Revoke access for {slug}"], cwd=cwd)
         run_cmd(["git", "push"], cwd=cwd)

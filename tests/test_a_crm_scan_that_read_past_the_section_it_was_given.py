@@ -259,32 +259,54 @@ def _failing(stderr):
     return commit_fn
 
 
-def test_a_text_mode_commit_failure_returns_false_instead_of_raising(capsys):
+@pytest.fixture
+def overlay(tmp_path):
+    """A repo path OUTSIDE the engine clone.
+
+    These four cases passed `Path(".")` until 2026-09-08, which resolves to the
+    engine root under pytest, and it read as a harmless placeholder because
+    `commit_fn` is a stub that never runs git. It stopped being harmless when
+    `try_commit` gained the containment refusal that keeps the two contact tools
+    from committing the engine on a data-less clone: three of these went red and
+    a fourth, `test_a_failure_with_no_stderr_still_returns_false`, went on
+    passing over the refusal instead of over the handler it was written for.
+    A real overlay path is what makes each of them measure its own subject.
+    """
+    path = tmp_path / ".heading-os-data" / "crm"
+    path.mkdir(parents=True)
+    return path
+
+
+def test_a_text_mode_commit_failure_returns_false_instead_of_raising(capsys,
+                                                                     overlay):
     """The defect: `.decode()` on a str stderr raised from inside the handler."""
     assert crm.try_commit(
-        _failing("fatal: could not read Username\n"), Path("."), [], "m", "target"
+        _failing("fatal: could not read Username\n"), overlay, [], "m", "target"
     ) is False
     assert "could not read Username" in capsys.readouterr().out
 
 
-def test_a_bytes_mode_commit_failure_still_reports_its_reason(capsys):
+def test_a_bytes_mode_commit_failure_still_reports_its_reason(capsys, overlay):
     assert crm.try_commit(
-        _failing(b"fatal: nothing to commit\n"), Path("."), [], "m", "source"
+        _failing(b"fatal: nothing to commit\n"), overlay, [], "m", "source"
     ) is False
     assert "nothing to commit" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("stderr", [None, "", b"", "   "])
-def test_a_failure_with_no_stderr_still_returns_false(stderr):
+def test_a_failure_with_no_stderr_still_returns_false(stderr, capsys, overlay):
     assert crm.try_commit(
-        _failing(stderr), Path("."), [], "m", "target"
+        _failing(stderr), overlay, [], "m", "target"
     ) is False
+    # False for the RIGHT reason. Both paths return False, so without this the
+    # case cannot tell the handler from a containment refusal.
+    assert "Warning: git commit" in capsys.readouterr().out
 
 
-def test_a_commit_that_lands_returns_true():
+def test_a_commit_that_lands_returns_true(overlay):
     calls = []
     assert crm.try_commit(
         lambda repo, files, message: calls.append(message),
-        Path("."), [], "landed", "target",
+        overlay, [], "landed", "target",
     ) is True
     assert calls == ["landed"]

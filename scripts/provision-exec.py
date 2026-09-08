@@ -42,8 +42,9 @@ from scripts.utils.workspace import (
     get_workspace_root, validate_admin, get_exec_slug, load_exec_registry,
     get_data_config_dir,
     get_crm_central_path, load_admin_config,
-    load_github_org,
+    load_github_org, require_outside_engine_clone,
 )
+from scripts.utils.paths import DataRootError
 from scripts.utils.atomic import atomic_write_text
 from scripts.utils.clone_guard import require_main_clone
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
@@ -1068,8 +1069,25 @@ def register_in_exec_registry(state: dict, args, workspace_dir: Path, slug: str)
         print(f"  {GREEN}[ok]{RESET} Added {slug} to exec-registry.json")
 
     # Try to commit and push if in a git repo
+    cwd = str(registry_dir.parent)
+    # The DATA overlay, and `get_data_root()` has documented fallbacks to
+    # `<engine>/examples` and to `<engine>` itself when no overlay is
+    # configured. On a data-less clone this block would `git add`, `git commit`
+    # and `git push` the ENGINE. Not in the list of the ten sites the incident
+    # brief named, but the same defect in the same file as the one that was;
+    # fixing one copy and leaving its twin is the shape this repair exists to
+    # end. OUTSIDE the `try`, whose `except subprocess.CalledProcessError`
+    # would not have caught this anyway and whose "commit locally" advice would
+    # be the wrong thing to say about a refusal.
     try:
-        cwd = str(registry_dir.parent)
+        require_outside_engine_clone(Path(cwd), "the exec registry repo")
+    except DataRootError as exc:
+        print(f"  {RED}[error]{RESET} {exc}")
+        print(f"  {YELLOW}The registry file was written; it was NOT committed."
+              f"{RESET}")
+        return False
+
+    try:
         run_cmd(["git", "add", "config/exec-registry.json"], cwd=cwd)
         status = run_cmd(["git", "status", "--porcelain"], cwd=cwd)
         if status.stdout.strip():
@@ -1276,6 +1294,18 @@ def main():
         workspace_dir = (admin_root.parent / f"31c-workspace-{slug}").resolve()
     print(f"  Dir:   {workspace_dir}")
     print(f"{'=' * 50}")
+
+    # BEFORE the mkdir, because every step below receives this same directory.
+    # `--workspace-dir .` would `git init`-or-reuse the engine, rewrite its
+    # `.gitignore`, reset `user.name`/`user.email`, add an `origin` remote, and
+    # then `git add -A && git commit && git branch -M main && git push` on the
+    # engine (`init_git`, and again in `push_synced_content`). An exec workspace
+    # is a sibling of the engine; it is never the engine.
+    try:
+        require_outside_engine_clone(workspace_dir, "--workspace-dir")
+    except DataRootError as exc:
+        print(f"{RED}REFUSED:{RESET} {exc}", file=sys.stderr)
+        sys.exit(2)
 
     # Ensure workspace dir exists
     workspace_dir.mkdir(parents=True, exist_ok=True)

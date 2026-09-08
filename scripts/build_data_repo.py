@@ -27,8 +27,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.atomic import atomic_write_text
 from scripts.utils.clone_guard import require_main_clone
 from scripts.utils.colors import BOLD, GREEN, RED, RESET, YELLOW
-from scripts.utils.paths import DATA_SCHEMA_VERSION
-from scripts.utils.workspace import get_routing_destination, get_workspace_root
+from scripts.utils.paths import DATA_SCHEMA_VERSION, DataRootError
+from scripts.utils.workspace import (
+    get_routing_destination,
+    get_workspace_root,
+    require_outside_engine_clone,
+)
 
 def _tracked_files(root: Path) -> list[str]:
     # `-z`, because `core.quotepath=false` does not cover the class it looks
@@ -93,6 +97,16 @@ def main() -> int:
 
     root = get_workspace_root()
     target = Path(args.target).resolve() if args.target else (root.parent / ".heading-os-data")
+
+    # As in `build_engine_repo.py`, and for the sharper reason: this build ends
+    # in `git add -A` + `git commit --no-verify` over a tree of PRIVATE and
+    # CORPORATE files. An engine-internal `--target` copies them into the public
+    # clone and commits them past every gate in one step.
+    try:
+        require_outside_engine_clone(target, "--target")
+    except DataRootError as exc:
+        print(f"{RED}  REFUSING:{RESET} {exc}")
+        return 1
 
     buckets = partition(root)
     data_files = sorted(buckets["private"] + buckets["corporate"])

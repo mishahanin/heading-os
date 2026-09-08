@@ -50,6 +50,7 @@ from scripts.utils.workspace import (  # noqa: E402
     get_crm_contacts_dir,
     get_corporate_root,
     is_exec_workspace,
+    require_outside_engine_clone,
 )
 from scripts.utils.operator_identity import corporate_email_domain  # noqa: E402
 from scripts.utils.markdown import parse_frontmatter_str as _parse_frontmatter  # noqa: E402
@@ -79,6 +80,26 @@ def try_commit(commit_fn, repo: Path, files, message: str, label: str) -> bool:
     "complete".
     """
     import subprocess
+
+    from scripts.utils.paths import DataRootError
+
+    # THE SHARED ROOT for both contact tools. `merge-contacts.py` and
+    # `transfer-contact.py` reach git only through here (four call sites), and
+    # each derives `repo` from `get_crm_contacts_dir()` or
+    # `get_per_exec_contacts_dir()`. `get_data_root()` has documented fallbacks
+    # to `<engine>/examples` and to `<engine>` itself, so on a data-less clone
+    # `repo` is a directory in the engine work tree and `commit_fn` commits it.
+    #
+    # Reported through the boolean this function exists to return, not raised:
+    # every caller reads False as "stop and say INCOMPLETE", which is the right
+    # outcome here. The message says refused rather than failed, because "commit
+    # manually" is exactly the wrong advice for this one.
+    try:
+        require_outside_engine_clone(repo, f"the {label} repo")
+    except DataRootError as exc:
+        print(f"REFUSED: {exc}")
+        print(f"  Nothing was staged or committed for the {label} repo.")
+        return False
 
     try:
         commit_fn(repo, files, message)

@@ -3787,14 +3787,138 @@ _YARD_BRANCH_MOVE_FLAGS = frozenset(("-m", "-M", "--move", "-c", "-C", "--copy")
 # and refused `cd /tmp && cat <HELM>/x` because it did not. Both are fixed by
 # asking about each link.
 #
+# Kept as the FALLBACK, for the two inputs the quote-aware splitter below
+# refuses to guess at: a heredoc, and a command whose quoting does not close.
+#
 # Its bluntness, stated because it is met in practice rather than in theory: a
 # heredoc body is split the same way, so writing a file whose CONTENT quotes a
-# refused command is itself refused. Twice while writing the commit message for
-# this change. That is the safe direction and the same trade the redirection
-# check below makes, and the workaround is one tool call (write the file with
-# the Write tool, not with `cat <<EOF`). A shell-accurate parse here would be a
-# second shell in this file.
+# refused command is itself refused. That is the safe direction and the same
+# trade the redirection check below makes, and the workaround is one tool call
+# (write the file with the Write tool, not with `cat <<EOF`).
 _YARD_CHAIN_RE = re.compile(r"(?:&&|\|\||;|\||\n)")
+
+# The shells whose `-c` argument is a COMMAND rather than data, and so is read
+# as one. `eval` is handled beside them for the same reason.
+_YARD_SHELL_VERBS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "ash"})
+
+# How far a payload may nest before the descent stops. `sh -c "sh -c ..."` is
+# already contrived; three is a bound, not a judgement about what is legitimate.
+_YARD_PAYLOAD_DEPTH = 3
+
+# Prefixes that carry a command without being one. Stripped in exactly one
+# place, because `_yard_words` and `_yard_shell_payload` both need the same
+# answer and a second copy is the one that stops being fixed.
+_YARD_WORD_PREFIXES = ("sudo", "env", "time", "nice", "nohup")
+
+
+def _yard_strip_prefix(words: list[str]) -> list[str]:
+    """Drop a leading `sudo`/`env FOO=1`/`time` prefix from a link's words."""
+    while words and (words[0] in _YARD_WORD_PREFIXES
+                     or "=" in words[0] and not words[0].startswith("-")):
+        words = words[1:]
+    return words
+
+
+def _yard_quoted_positions(text: str) -> list[bool]:
+    """True at every index the shell would NOT read as syntax.
+
+    A character inside single or double quotes, the quote characters
+    themselves, and anything a backslash escaped. Raises `ValueError` when the
+    text ends inside a quote, because a mask over text this scanner could not
+    parse is a guess, and every caller falls back to the blunt split rather
+    than act on one.
+    """
+    mask = [False] * len(text)
+    quote = ""
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if quote:
+            mask[index] = True
+            if char == "\\" and quote == '"' and index + 1 < len(text):
+                mask[index + 1] = True
+                index += 2
+                continue
+            if char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char == "\\" and index + 1 < len(text):
+            mask[index + 1] = True
+            index += 2
+            continue
+        if char in "'\"":
+            quote = char
+            mask[index] = True
+        index += 1
+    if quote:
+        raise ValueError(f"unterminated {quote} quote")
+    return mask
+
+
+def _yard_split_chain(command: str, mask: list[bool]) -> list[str]:
+    """Split on the chain operators the shell would act on, and no others."""
+    segments: list[str] = []
+    start = index = 0
+    length = len(command)
+    while index < length:
+        if mask[index]:
+            index += 1
+            continue
+        char = command[index]
+        if (char in "&|" and index + 1 < length
+                and command[index + 1] == char and not mask[index + 1]):
+            segments.append(command[start:index])
+            index += 2
+            start = index
+            continue
+        if char in ";|\n":
+            segments.append(command[start:index])
+            index += 1
+            start = index
+            continue
+        index += 1
+    segments.append(command[start:])
+    return [segment.strip() for segment in segments if segment.strip()]
+
+
+def _yard_shell_payload(link: str) -> str | None:
+    """The command text this link would EXECUTE as a shell, or None.
+
+    `sh -c '<payload>'` and `eval '<payload>'` run their argument; `grep`,
+    `echo` and `herdr agent prompt` carry the same characters as DATA. Once
+    quoting is respected, that difference has to be made explicitly, and
+    MEASURED 2026-09-08 it was not being made at all: `sh -c 'rm -rf <yard>'`
+    was PERMITTED by every wall in this file, because the single-quoted payload
+    contained no chain operator to split on and the link's verb was `sh`. The
+    double-quoted spelling was refused only by accident of where the blunt
+    split happened to cut it.
+    """
+    import shlex
+    try:
+        words = _yard_strip_prefix(shlex.split(link))
+    except ValueError:
+        return None          # unbalanced quoting; the caller has the blunt path
+    if not words:
+        return None
+    verb = words[0].rsplit("/", 1)[-1]
+    if verb == "eval":
+        return " ".join(words[1:]) or None
+    if verb not in _YARD_SHELL_VERBS:
+        return None
+    # `-c`, and the SHORT bundles that carry it: `-lc`, `-euc`. The payload is
+    # the first word after the flag carrying it.
+    #
+    # A long option is skipped, and that is not tidiness. Found by mutation
+    # 2026-09-08: the first version asked only whether the word held a `c`, so
+    # `bash --norc -c '<payload>'` matched on `--norc`, returned the literal
+    # `-c` as the payload, and the real one was never read at all.
+    for index, word in enumerate(words[1:], start=1):
+        if (word.startswith("-") and not word.startswith("--")
+                and "c" in word[1:]):
+            rest = words[index + 1:]
+            return rest[0] if rest else None
+    return None
 
 
 def _yard_in_a_yard() -> bool:
@@ -3805,8 +3929,52 @@ def _yard_in_a_yard() -> bool:
     return not is_main_clone(WORKSPACE)
 
 
-def _yard_segments(command: str) -> list[str]:
-    return [seg.strip() for seg in _YARD_CHAIN_RE.split(command) if seg.strip()]
+def _yard_links(command: str) -> list[str]:
+    """The chain's links: quote-aware where the quoting can be established.
+
+    MEASURED 2026-09-08. Splitting on every `|` and every newline regardless of
+    quoting made the wall refuse commands that merely QUOTE a refused one:
+    `herdr agent prompt <id> "...\\n  git worktree remove --force <path>\\n..."`
+    was refused as though the middle line were a command, and so was any
+    `grep`, `rg` or `echo` of the same text. The brief describing this defect
+    was itself refused on its first send, by the wall it describes.
+
+    A heredoc keeps the blunt split, deliberately. Its body is not shell
+    quoting, an apostrophe in English prose inside one would open a quote this
+    scanner would then close somewhere arbitrary, and reading heredoc bodies is
+    a property the write guard is documented to want.
+    """
+    if "<<" in command:
+        return [seg.strip() for seg in _YARD_CHAIN_RE.split(command) if seg.strip()]
+    try:
+        mask = _yard_quoted_positions(command)
+    except ValueError:
+        # Quoting that does not close. The shell would reject this outright, so
+        # there is no correct reading to find; take the blunt one, which splits
+        # MORE rather than less.
+        return [seg.strip() for seg in _YARD_CHAIN_RE.split(command) if seg.strip()]
+    return _yard_split_chain(command, mask)
+
+
+def _yard_segments(command: str, _depth: int = _YARD_PAYLOAD_DEPTH) -> list[str]:
+    """Every link that would RUN, the payload of a `sh -c` included.
+
+    The payload is appended immediately after the link that carries it, so a
+    `cd` inside one is followed for the commands that come after it. Its limit,
+    stated rather than left to be found: that `cd` also reaches the OUTER links
+    that follow, where a real shell would have discarded it, so
+    `bash -c "cd /elsewhere" && rm -rf <relative>` resolves the relative path
+    against the wrong directory. The alternative was not descending at all,
+    which is the hole in `_yard_shell_payload`'s docstring.
+    """
+    out: list[str] = []
+    for link in _yard_links(command):
+        out.append(link)
+        if _depth > 0:
+            payload = _yard_shell_payload(link)
+            if payload:
+                out.extend(_yard_segments(payload, _depth - 1))
+    return out
 
 
 def _yard_words(segment: str) -> list[str]:
@@ -3815,11 +3983,7 @@ def _yard_words(segment: str) -> list[str]:
     A prefix would otherwise make every command look like an unknown verb and
     the guard would refuse `env FOO=1 cat <HELM>/x`, which is a read.
     """
-    words = segment.split()
-    while words and (words[0] in ("sudo", "env", "time", "nice", "nohup")
-                     or "=" in words[0] and not words[0].startswith("-")):
-        words = words[1:]
-    return words
+    return _yard_strip_prefix(segment.split())
 
 
 # `2>&1`, `>&2` and `2>/dev/null` are plumbing, not writes. Everything else
@@ -4582,6 +4746,22 @@ _YARD_DELETION_HINT_RE = re.compile(r"(?:^|[^\w-])rm(?:$|[^\w-])|worktree")
 _YARD_RM_RECURSIVE_RE = re.compile(r"^-[a-zA-Z]*[rR]")
 
 
+# A usage request is not a deletion. MEASURED 2026-09-08 in HELM against the
+# version this exemption was added to: `herdr worktree remove --help`,
+# `herdr worktree remove -h`, `git worktree remove --help` and
+# `git worktree remove -h` all produced the byte-identical refusal telling the
+# operator to name the worktree by its path, for four commands that delete
+# nothing. `scripts/herdr/README.md` records the herdr help form as the source
+# of a measurement, so the wall refused a step of its own runbook.
+#
+# The exemption is NARROW on purpose. A help flag exempts nothing by itself; it
+# is read only when the link carries NOTHING ELSE: no path, no `--workspace`,
+# no `--force`, no second flag. Whether a CLI honours a help flag when it is
+# also handed work is that CLI's business and not knowable from a hook, so the
+# only case waved through is the one where there is no work to honour.
+_YARD_HELP_FLAGS = frozenset({"--help", "-h"})
+
+
 def _yard_deletion_operands(words: list[str]) -> list[str]:
     """The non-flag words of a link, unquoted, `--` and what follows included."""
     out = []
@@ -4747,6 +4927,13 @@ def _yard_deletion_requests(
             operands = _yard_git_operands("worktree", words)
             if operands[:1] != ["remove"]:
                 continue
+            # `_yard_git_flags` reads the flags AFTER the subcommand only, so
+            # `git -C /x worktree remove -h` is covered and `git --no-pager`
+            # cannot masquerade as a help flag.
+            flags = _yard_git_flags("worktree", words)
+            if len(operands) == 1 and flags and all(
+                    flag in _YARD_HELP_FLAGS for flag in flags):
+                continue          # usage only: no operand and no other flag
             requests.append(("git worktree remove",
                              [_resolve(operand) for operand in operands[1:]],
                              None))
@@ -4756,6 +4943,10 @@ def _yard_deletion_requests(
             operands = _yard_deletion_operands(words)
             if operands[:2] != ["worktree", "remove"]:
                 continue
+            flags = [word.split("=", 1)[0] for word in words if word.startswith("-")]
+            if len(operands) == 2 and flags and all(
+                    flag in _YARD_HELP_FLAGS for flag in flags):
+                continue          # usage only: no operand and no other flag
             workspace_id = ""
             for index, word in enumerate(words):
                 if word.startswith("--workspace="):
@@ -5046,12 +5237,26 @@ def check_yard_deletion_guard(payload: dict) -> dict | None:
 
     for form, targets, closes in requests:
         if not targets:
+            # The advice is per FORM, because the two forms take different
+            # things and the single sentence this replaces offered both to
+            # both. MEASURED 2026-09-08: `herdr worktree remove <path>` cannot
+            # work. `_yard_deletion_operands` collects the positional, the
+            # herdr branch never reads it (it resolves the checkout from
+            # `--workspace` alone), and herdr itself exits 2 on an extra
+            # operand. So half of that sentence sent the operator to a spelling
+            # that fails twice over, on the refusal path, which is exactly
+            # where a wall has to be right or it gets switched off.
+            advice = (
+                "Name the workspace id herdr knows, as `--workspace <id>`, and "
+                "run it again. A path does not work for this form: herdr "
+                "resolves the checkout from `--workspace` alone."
+                if form == "herdr worktree remove"
+                else "Name the worktree by its path and run it again.")
             return _yard_deny(
                 f"YARD deletion guard — intentional policy block, not an error. "
                 f"`{form}` names no checkout this hook could resolve, so whether "
                 f"it would erase unfinished work cannot be established.\n\n"
-                f"Name the worktree by its path, or name the workspace id that "
-                f"herdr knows, and run it again."
+                f"{advice}"
             )
         for target in targets:
             # `root == target` is the yard itself; `root under target` is a

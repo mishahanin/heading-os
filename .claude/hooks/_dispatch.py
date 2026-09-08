@@ -3990,6 +3990,41 @@ def _yard_words(segment: str) -> list[str]:
 # containing `>` sends bytes to a file.
 _YARD_REDIRECT_NOISE_RE = re.compile(r"\d?>&\d|\d?>\s*/dev/null")
 
+# A redirection OPERATOR standing alone as a word, its target being the word
+# after it: `> out.txt`, `2>> err.log`, `&> all.log`. The operator is never an
+# operand of the command; its target may be a real file, and that target is
+# deliberately NOT covered here.
+_YARD_REDIRECT_OPERATOR_RE = re.compile(r"\d?>>?|&>>?|>&|<")
+
+
+def _yard_is_redirection(word: str) -> bool:
+    """True when this word is shell plumbing rather than an operand.
+
+    ONE predicate, called from `_yard_git_operands` and
+    `_yard_deletion_operands`, because both collect "the words that are not
+    flags" and a redirection token carries no dash, so both were counting it as
+    an operand. MEASURED 2026-09-08 in HELM against the merged hook:
+    `herdr worktree remove --help 2>&1` collected `['worktree', 'remove',
+    '2>&1']`, three operands where the help exemption needs two, so the
+    exemption did not apply and the wall refused a help request. The git
+    spelling collected the same token and passed it to `_resolve`, which read a
+    redirection target as a candidate deletion PATH: harmless today only
+    because no checkout is ever spelled that way.
+
+    `_YARD_REDIRECT_NOISE_RE` is reused rather than restated. It is this file's
+    existing statement of what plumbing looks like, and it is anchored here
+    with `fullmatch` because there it is substituted out of a whole segment.
+    It is NOT sufficient on its own, and the gap is deliberate rather than
+    overlooked: it does not match `&>/dev/null`, `2>>/dev/null`, or a redirect
+    into a real file (`> out.txt`, `2> err.log`, `>> log`). Every one of those
+    stays an operand, so the link is JUDGED instead of waved through. That is
+    the safe direction. Under-exempting costs a refusal the operator can work
+    around; over-exempting is a bypass, because any word accepted here vanishes
+    from the count the help exemption rests on.
+    """
+    return bool(_YARD_REDIRECT_NOISE_RE.fullmatch(word)
+                or _YARD_REDIRECT_OPERATOR_RE.fullmatch(word))
+
 
 def _yard_segment_is_read_only(segment: str) -> bool:
     # A redirection settles it before the verb is even looked at. `echo` is on
@@ -4049,9 +4084,10 @@ def _yard_git_subcommand(words: list[str]) -> str:
 
 
 def _yard_git_operands(subcommand: str, words: list[str]) -> list[str]:
-    """The non-flag words after `subcommand`, unquoted."""
+    """The non-flag words after `subcommand`, unquoted, redirections dropped."""
     rest = words[words.index(subcommand) + 1:]
-    return [w.strip("'\"") for w in rest if not w.startswith("-")]
+    return [w.strip("'\"") for w in rest
+            if not w.startswith("-") and not _yard_is_redirection(w)]
 
 
 def _yard_git_flags(subcommand: str, words: list[str]) -> list[str]:
@@ -4763,12 +4799,19 @@ _YARD_HELP_FLAGS = frozenset({"--help", "-h"})
 
 
 def _yard_deletion_operands(words: list[str]) -> list[str]:
-    """The non-flag words of a link, unquoted, `--` and what follows included."""
+    """The non-flag words of a link, unquoted, `--` and what follows included.
+
+    A redirection is dropped on BOTH sides of `--`. The shell removes plumbing
+    before the program is handed its argv, so `--` ends the flags and has no
+    bearing on whether `2>&1` is one.
+    """
     out = []
     seen_separator = False
     for word in words[1:]:
         if word == "--" and not seen_separator:
             seen_separator = True
+            continue
+        if _yard_is_redirection(word):
             continue
         if word.startswith("-") and not seen_separator:
             continue

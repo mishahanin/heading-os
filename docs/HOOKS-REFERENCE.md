@@ -65,6 +65,18 @@ The check reads the `Bash` command and classifies it with `release_action()`:
 
 The check then reads the most recent typed prompt from the session transcript. It reads two records. The harness-written `last-prompt` holds at most 200 characters, and the same turn's `promptSource: "typed"` record holds the full text. The capped record confirms the full one by prefix. `prompt_authorises()` accepts the action when that prompt carries an authorising word in English or Russian. It refuses when the prompt carries a negation anywhere. The check appends each authorised release to a log the operator can audit.
 
+**Where the audit log lives, and why it is not in the repository.** Each authorised release appends one JSON line to `~/.heading-os/release/authorised.jsonl`. The line carries the timestamp, the action, the command, and the operator's authorising words. It also carries the checkout and the branch the release happened in. That path is outside every checkout, and both halves of that matter. Until 2026-09-08 the log sat under the current checkout at `.claude/state/release/authorised.jsonl`. Every YARD therefore kept its own copy, and the documented end of a yard's life deleted it. That is the case where the trace matters most, because a yard is the session the operator was not sitting at. The old path also held the operator's own typed words inside the engine, which never contains real data. It is gitignored, and gitignored is not absent. Neither `scripts/leak-guard.py` nor the push-time content scan has ever looked at it. `HEADING_OS_RELEASE_LOG` names an absolute file to use instead. Under pytest with no such pin, nothing is written at all.
+
+**The records written before the move.** They are still at `<checkout>/.claude/state/release/authorised.jsonl` in whatever checkouts survive. The main clone held 1198 of them on 2026-09-08. Nothing migrates them automatically. A YARD cannot write into HELM, and a silent rewrite is the wrong shape for an audit trail. Those records are operator words sitting in the engine, so the intended disposition is a MOVE and not a copy. Run it once, in the main clone:
+
+```bash
+mkdir -p ~/.heading-os/release
+cat .claude/state/release/authorised.jsonl >> ~/.heading-os/release/authorised.jsonl
+rm .claude/state/release/authorised.jsonl
+```
+
+Order is deliberate: append first, remove second, so an interrupted run loses nothing. Those records carry no `checkout` or `branch` field. Read that absence as "the main clone, branch unknown", which is what they were.
+
 **A marked brief never authorises.** The gate refuses a prompt carrying the line `X-HEADING-BRIEF: machine-to-machine, not an operator authorisation`, before it reads a single word. `scripts/herdr-brief.py` prepends that line to every brief HELM sends into a YARD. The gate matches it as a substring, so a quoted, indented or re-wrapped brief stays inert.
 
 **The gate fails closed.** It refuses the release when it cannot read the transcript. A gate that opens when it cannot see is not a gate. It says WHICH read failed, because two unrelated states reach that refusal. An absent or unreadable transcript is one. The other is a timing state. The harness writes the full typed record and the capped one separately. MEASURED 2026-09-06 over 982 turns holding a tool call: the capped record lands after the turn's first `tool_use` record in 515 of them. So a commit issued as a turn's first tool call meets a half-written pair about half the time. The refusal names that, instead of blaming a file it could not read.

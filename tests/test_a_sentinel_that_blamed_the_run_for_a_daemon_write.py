@@ -141,10 +141,11 @@ def test_the_baseline_is_a_committed_measured_number():
     assert data["reachable_children"] >= 0
     # A date pinned to a literal is what forces whoever moves the number to come
     # here and say so, which is the point; it is not a claim that the number
-    # cannot change. Two moves are on the record:
+    # cannot change. Three moves are on the record:
     #
     #   2026-09-04  DOWNWARD, 9659 -> 6100, re-frozen after the venv pin.
     #   2026-09-06  UPWARD, 6100 -> 6930, and `reachable_tests` 2715 added.
+    #   2026-09-09  UPWARD, 6930 -> 7078 and 2715 -> 2760.
     #
     # The second is not a ratchet being relaxed. 6100 was computed from runs
     # that each silently lost one to three xdist workers to an unencodable
@@ -153,7 +154,16 @@ def test_the_baseline_is_a_committed_measured_number():
     # Six HELM runs then gave 6921/2713 five times and 6925/2714 once, the
     # outlier being the only run that overlapped a worktree writing into the
     # shared overlay.
-    assert data["measured"] == "2026-09-06"
+    #
+    # The third is the SUITE GROWING, which is the one reason a shrink-only
+    # number may go up. Roughly forty-five test functions that spawn a child
+    # landed between 0f348c2 and the merge of the release-log repair, and the
+    # gate's own offender report names one of them by node id. Two full HELM
+    # runs on 2026-09-09 gave 7069/2758 EXACTLY at 664s and 820s, so it is not
+    # the pre-4e535b1 flap returning. The reduction work the number exists to
+    # provoke is NOT done: 224 spawns of `uname -p` are attributed to no test
+    # and their caller is unidentified. See the baseline file's own note.
+    assert data["measured"] == "2026-09-09"
 
 
 def test_a_missing_or_corrupt_baseline_fails_strict(tmp_path, monkeypatch):

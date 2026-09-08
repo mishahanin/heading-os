@@ -14,8 +14,9 @@ engine's guards have been *proved* to fire there.
 ## Install
 
 Once per machine. Nothing is downloaded and nothing is copied: `link` registers
-the directory in place, so the plugin IS these tracked files and cannot drift
-from the repo. Link the path inside HELM, which is always on `main`.
+the directory in place, so the COMMANDS are these tracked files and are read
+from disk every time one fires. Link the path inside HELM, which is always on
+`main`.
 
 ```bash
 herdr plugin link "$PWD/scripts/herdr/heading-os-yard"   # from HELM
@@ -26,6 +27,38 @@ Do not copy the directory somewhere else first and link the copy. Installed that
 way on 2026-09-03, the copy was byte-identical on the day and would have gone on
 answering `worktree.created` with whatever it held the day it was made, while
 every edit to the tracked files did nothing.
+
+### Editing the manifest arms nothing. Re-link, or the change is not live.
+
+The sentence above used to read "the plugin IS these tracked files and cannot
+drift from the repo", and that is true of the commands and false of the
+`[[events]]` blocks. A linked plugin's SUBSCRIPTIONS are a snapshot herdr takes
+at link time and keeps in its own registration; the manifest is not consulted
+again, and a server restart re-reads the snapshot rather than the file.
+
+MEASURED 2026-09-08. The `worktree.opened` subscription was added to the
+manifest on 2026-09-03 at 21:48; the registration had been written at 19:04 the
+same day. Five days later the running server still listed one subscription:
+
+```
+manifest    on = worktree.created, worktree.opened
+registered  herdr plugin list --plugin heading-os.yard --json
+            -> events: ["worktree.created"]
+```
+
+So the three routes into an unprovisioned YARD that `worktree.opened` exists to
+cover were open the whole time, and a herdr upgrade to 0.9.0 that restarted the
+server did not close them. After any edit to `[[events]]` in the manifest:
+
+```bash
+herdr plugin unlink heading-os.yard
+herdr plugin link "$PWD/scripts/herdr/heading-os-yard"
+herdr plugin list --plugin heading-os.yard --json   # confirm every `on` is there
+```
+
+`tests/test_a_plugin_subscription_the_server_never_registered.py` asks the
+running server the same question, so the drift now fails a test instead of
+waiting to be noticed.
 
 Then, in `~/.config/herdr/config.toml` (`herdr --help` prints its path):
 
@@ -227,7 +260,7 @@ herdr plugin config-dir heading-os.yard   # where this plugin's own .env lives
 
 | File | What it is |
 |---|---|
-| `heading-os-yard/herdr-plugin.toml` | the manifest: the `worktree.created` event and the `doctor` action |
+| `heading-os-yard/herdr-plugin.toml` | the manifest: the `worktree.created` and `worktree.opened` events, and the `doctor` action |
 | `heading-os-yard/yard-bootstrap.sh` | the eleven steps above |
 | `heading-os-yard/data-overlay-pre-commit` | the hook body `install-data-overlay-guard.py` installs |
 
